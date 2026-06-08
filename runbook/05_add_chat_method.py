@@ -1,27 +1,33 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "anthropic", # type: ignore
+#     "groq",
 #     "pydantic",
+#     "python-dotenv",
 # ]
 # ///
 
 import os
 import sys
+import json
 from typing import List, Dict, Any
-from anthropic import Anthropic
+from groq import Groq
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables from a .env file if present
+load_dotenv()
 
 
 class Tool(BaseModel):
     name: str
     description: str
-    input_schema: Dict[str, Any]
+    parameters: Dict[str, Any]  # Groq/OpenAI format expects 'parameters'
 
 
 class AIAgent:
     def __init__(self, api_key: str):
-        self.client = Anthropic(api_key=api_key)
+        self.client = Groq(api_key=api_key)
         self.messages: List[Dict[str, Any]] = []
         self.tools: List[Tool] = []
         self._setup_tools()
@@ -31,7 +37,7 @@ class AIAgent:
             Tool(
                 name="read_file",
                 description="Read the contents of a file at the specified path",
-                input_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "path": {
@@ -45,7 +51,7 @@ class AIAgent:
             Tool(
                 name="list_files",
                 description="List all files and directories in the specified path",
-                input_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "path": {
@@ -59,7 +65,7 @@ class AIAgent:
             Tool(
                 name="edit_file",
                 description="Edit a file by replacing old_text with new_text. Creates the file if it doesn't exist.",
-                input_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "path": {
@@ -143,7 +149,6 @@ class AIAgent:
 
                 return f"Successfully edited {path}"
             else:
-                # Only create directory if path contains subdirectories
                 dir_name = os.path.dirname(path)
                 if dir_name:
                     os.makedirs(dir_name, exist_ok=True)
@@ -158,80 +163,69 @@ class AIAgent:
     def chat(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
 
+        # Map schemas into OpenAI/Groq function syntax
         tool_schemas = [
             {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema,
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
             }
             for tool in self.tools
         ]
 
         while True:
             try:
-                response = self.client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
+                # Swapped to the correct chat completions router
+                response = self.client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
                     max_tokens=4096,
                     messages=self.messages,
                     tools=tool_schemas,
+                    tool_choice="auto",
                 )
 
-                assistant_message = {"role": "assistant", "content": []}
+                response_message = response.choices[0].message
+                tool_calls = response_message.tool_calls
 
-                for content in response.content:
-                    if content.type == "text":
-                        assistant_message["content"].append(
-                            {
-                                "type": "text",
-                                "text": content.text,
-                            }
-                        )
-                    elif content.type == "tool_use":
-                        assistant_message["content"].append(
-                            {
-                                "type": "tool_use",
-                                "id": content.id,
-                                "name": content.name,
-                                "input": content.input,
-                            }
-                        )
+                # Crucial step: append the model's call payload directly back into history
+                self.messages.append(response_message)
 
-                self.messages.append(assistant_message)
+                if tool_calls:
+                    for tool_call in tool_calls:
+                        tool_name = tool_call.function.name
+                        # Parse out the arguments from their returned serialized string state
+                        tool_input = json.loads(tool_call.function.arguments)
 
-                tool_results = []
-                for content in response.content:
-                    if content.type == "tool_use":
-                        result = self._execute_tool(content.name, content.input)
-                        tool_results.append(
+                        result = self._execute_tool(tool_name, tool_input)
+
+                        # Deliver tool resolution contexts back to Groq under 'tool' role identifiers
+                        self.messages.append(
                             {
-                                "type": "tool_result",
-                                "tool_use_id": content.id,
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
                                 "content": result,
                             }
                         )
-
-                if tool_results:
-                    self.messages.append({"role": "user", "content": tool_results})
+                    # Re-loop to send execution logs back up for final phrasing evaluation
+                    continue
                 else:
-                    return response.content[0].text if response.content else ""
+                    return response_message.content if response_message.content else ""
 
             except Exception as e:
                 return f"Error: {str(e)}"
 
 
 if __name__ == "__main__":
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        print("Error: ANTHROPIC_API_KEY not set")
+        print("Error: GROQ_API_KEY not set")
         sys.exit(1)
+
     agent = AIAgent(api_key)
-    # Test chat
+    # Executing localized context test run
     response = agent.chat("What files are in the current directory?")
     print(response)
-
-
-# ```bash
-# export ANTHROPIC_API_KEY="your-api
-# uv run runbook/05_add_chat_method.py
-# ```
-# Should print a response from Claude listing the files in the directory
