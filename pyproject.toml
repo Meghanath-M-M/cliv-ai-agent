@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-cli-assistant"
+version = "0.1.0"
+description = "A conversational AI agent that can read, list, and edit files."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "groq",
+    "pydantic",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+ai-assist = "ai_cli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ai_cli"]

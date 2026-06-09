@@ -1,36 +1,36 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "openai",
-#     "pydantic",
-# ]
-# ///
-
-import os
 import sys
 import argparse
-import logging
+from getpass import getpass
 from ai_cli.agent import AIAgent
+from ai_cli.config import get_api_key, save_api_key
 
 def main():
     parser = argparse.ArgumentParser(
         description="AI Code Assistant - A conversational AI agent with file editing capabilities"
     )
     parser.add_argument(
-        "--api-key", help="XAI API key (or set XAI_API_KEY env var)"
+        "--api-key", help="Groq API key (overrides saved config or env var)"
     )
     args = parser.parse_args()
 
-    api_key = args.api_key or os.environ.get("XAI_API_KEY")
+    api_key = args.api_key or get_api_key()
+    
     if not api_key:
-        print(
-            "Error: Please provide an API key via --api-key or XAI_API_KEY environment variable"
-        )
-        sys.exit(1)
+        print("No Groq API key found.")
+        print("You can get one from: https://console.groq.com/keys")
+        api_key = getpass("Please enter your Groq API Key: ").strip()
+        if not api_key:
+            print("Error: API key is required to start the agent.")
+            sys.exit(1)
+        
+        save = input("Would you like to save this key for future use? (y/n): ").strip().lower()
+        if save == 'y':
+            save_api_key(api_key)
+            print("API key saved.")
 
     agent = AIAgent(api_key)
 
-    print("AI Code Assistant")
+    print("\nAI Code Assistant")
     print("================")
     print("A conversational AI agent that can read, list, and edit files.")
     print("Type 'exit' or 'quit' to end the conversation.")
@@ -58,7 +58,6 @@ def main():
         except Exception as e:
             print(f"\nError: {str(e)}")
             print()
-
 
 if __name__ == "__main__":
     main()

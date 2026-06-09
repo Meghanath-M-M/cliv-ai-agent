@@ -56,21 +56,39 @@ After installation, verify it's working:
 uv --version
 ```
 
+## Installing the Agent
+
+The tool can be installed globally on your system using `uv`. From the repository root, run:
+
+```bash
+uv tool install .
+```
+
+If you plan to modify the code, you can install it in editable mode:
+```bash
+uv tool install -e .
+```
+
 ## Running the Agent
 
-1. Export your Anthropic API key:
+Once installed, you can start the assistant from any terminal using:
+
+```bash
+ai-assist
+```
+
+The first time you run it, the agent will prompt you to enter your Anthropic API key, which it will securely save to `~/.config/ai_cli/config.json`. Alternatively, you can pass it via an environment variable or flag:
 
 ```bash
 export ANTHROPIC_API_KEY="your-api-key-here"
+ai-assist
 ```
 
-2. Run the agent:
+Or:
 
 ```bash
-uv run main.py
+ai-assist --api-key "your-api-key-here"
 ```
-
-The agent leverages uv's inline dependencies handling from the script headers, so no manual dependency installation is needed.
 
 ## License
 
