@@ -17,24 +17,28 @@ def main():
     
     if not api_key:
         print("No Groq API key found.")
-        print("You can get one from: https://console.groq.com/keys")
-        api_key = getpass("Please enter your Groq API Key: ").strip()
-        if not api_key:
-            print("Error: API key is required to start the agent.")
-            sys.exit(1)
+        print("For Lightning Fast execution, get a free key: https://console.groq.com/keys")
+        print("Or press [Enter] to run entirely OFFLINE using your local hardware (requires Ollama).")
         
-        save = input("Would you like to save this key for future use? (y/n): ").strip().lower()
-        if save == 'y':
-            save_api_key(api_key)
-            print("API key saved.")
+        input_key = getpass("Enter API Key (or press Enter for Offline Mode): ").strip()
+        
+        if input_key:
+            api_key = input_key
+            save = input("Would you like to save this key for future use? (y/n): ").strip().lower()
+            if save == 'y':
+                save_api_key(api_key)
+                print("API key saved.")
+        else:
+            print("\nStarting in OFFLINE mode. (Ensure Ollama is running)")
+            api_key = None
 
-    agent = AIAgent(api_key)
+    agent = AIAgent(api_key=api_key)
 
     print("\nAI Code Assistant")
     print("================")
+    print(f"Mode: {agent.mode.upper()}")
     print("A conversational AI agent that can read, list, and edit files.")
-    print("Type 'exit' or 'quit' to end the conversation.")
-    print()
+    print("Type 'exit' or 'quit' to end the conversation.\n")
 
     while True:
         try:
