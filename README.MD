@@ -1,92 +1,90 @@
-# AI CLI Assistant
+# 🤖 AI CLI Assistant
 
-A packaged, functional AI assistant operating right from your terminal. No heavy frameworks, just a clean, conversational agent built using Groq and Llama.
+A powerful, terminal-based AI coding assistant that can safely read, list, and edit your local files. Built for speed, privacy, and accuracy with a hybrid Online/Offline architecture.
 
-This repository demonstrates a working agent that can read, write, and edit files through natural conversation. It has been structured into a modern Python package using `pyproject.toml` and managed via `uv`, meaning you can install it globally with a single command.
+## ✨ Features
 
-You'll understand how AI agents parse responses, execute tools, and maintain conversation context.
+- 🌐 **Hybrid Execution**: Choose your engine. Run blazingly fast in the cloud using the Groq API, or run 100% privately offline using your local hardware via Ollama.
+- 🛠️ **Autonomous File Operations**: The agent can autonomously read codebases, list directory contents, and write/edit files based on your natural language commands.
+- 🛡️ **Safety Rails**: Prevents accidental overwrites. Any time the AI attempts to modify or create a file, it pauses and explicitly requests user permission [y/N].
+- 🧠 **Defensive Parsing**: Built with custom JSON shields to catch and gracefully handle hallucinations and formatting quirks typical of smaller local models.
+- 📦 **Reproducible Builds**: Packaged with uv for ultra-fast, conflict-free dependency management.
 
-## Credits
+## 🚀 Getting Started
 
-This repository is forked from Francis Beeson's implementation: [Single-File AI Agent Tutorial](https://github.com/leobeeson/single-file-ai-agent-tutorial)
+### Prerequisites
 
-The code is based on the tutorial by Thorsten Ball in ["How to Build an Agent"](https://ampcode.com/how-to-build-an-agent) from ampcode.com. Thank you, Thorsten. Brilliant guide.
-
-## Features
-
-- Complete Python package structure.
-- The AI agent can:
-  - Read file contents.
-  - List directory contents.
-  - Edit existing files or create new ones.
-- Interactive chat interface.
-- Error handling and feedback.
-- Logging of agent tool usage (`agent.log`).
-
-## Requirements
-
-- `uv` package manager (see installation instructions below)
 - Python 3.11 or higher
-- Groq API key (you can get one from [Groq Console](https://console.groq.com/keys))
+- `uv` (Recommended) or `pip`
+- For **Online Mode**: A free [Groq API Key](https://console.groq.com/keys)
+- For **Offline Mode**: [Ollama](https://ollama.com/) installed on your machine
 
-## Installing uv
+### Installation
 
-`uv` is an extremely fast Python package manager that simplifies installing modern Python applications.
+1. **Clone the repository**
 
-To [install](https://docs.astral.sh/uv/getting-started/installation/) `uv`:
+   ```bash
+   git clone https://github.com/yourusername/ai-cli-assistant.git
+   cd ai-cli-assistant
+   ```
 
-### Linux/macOS
+2. **Sync the environment**
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+   This project uses `uv` to guarantee exact package versions and reproducible builds.
 
-### Windows
+   ```bash
+   # Install uv if you don't have it
+   curl -LsSf https://astral.sh/uv/install.sh | sh
 
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+   # Sync dependencies from the uv.lock file
+   uv sync
+   ```
 
-After installation, verify it's working:
+   *(Alternatively, you can install via standard pip: `pip install -e .`)*
 
-```bash
-uv --version
-```
+3. **Download the Offline Model (Optional but Recommended)**
 
-## Installing the Agent
+   If you plan to run the agent without internet access, you must pull the local AI model to your machine:
 
-The tool can be installed globally on your system using `uv`. From the repository root, run:
+   ```bash
+   ollama pull qwen2.5-coder:3b
+   ```
 
-```bash
-uv tool install .
-```
+## 💻 Usage
 
-If you plan to modify the code, you can install it in editable mode:
-```bash
-uv tool install -e .
-```
-
-## Running the Agent
-
-Once installed, you can start the assistant from any terminal using:
+To start the assistant, simply run the global command from anywhere in your terminal:
 
 ```bash
 ai-assist
 ```
 
-The first time you run it, the agent will prompt you to enter your Groq API key, which it will securely save to `~/.config/ai_cli/config.json` (or the equivalent user config dir). Alternatively, you can pass it via an environment variable or flag:
+### First Run & Configuration
 
-```bash
-export GROQ_API_KEY="your-api-key-here"
-ai-assist
-```
+On startup, the CLI will ask for your Groq API key:
 
-Or:
+- **To run Online**: Paste your API key and press enter. You can choose to save this key locally so you don't have to enter it again.
+- **To run Offline**: Simply press Enter without typing a key. The agent will automatically detect Ollama and pivot to your local offline model.
 
-```bash
-ai-assist --api-key "your-api-key-here"
-```
+### Example Commands
 
-## License
+Once the chat starts, try issuing natural language commands:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- `"List the files in my current directory."`
+- `"Read main.py and tell me what it does."`
+- `"Create a new file called hello.py that prints 'Hello World'."`
+- `"Edit config.py and change the default port to 8080."`
+
+## ⚙️ How It Works (Under The Hood)
+
+The assistant uses an array of predefined JSON tool schemas (`read_file`, `list_files`, `edit_file`) which the AI uses to interact with your operating system.
+
+- **Online Mode (Groq)**: Utilizes Meta's incredibly fast `llama-4-scout` architecture for instantaneous, highly accurate tool-calling.
+- **Offline Mode (Ollama)**: Relies on Alibaba's `qwen2.5-coder:3b`. Because smaller models can sometimes struggle with strict JSON formatting, the offline engine wraps the interaction in a custom **Defensive Shield** to unwrap markdown blocks, enforce strict system rules, and prevent JSON leakage into the terminal output.
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yourusername/ai-cli-assistant/issues).
+
+## 📝 License
+
+This project is licensed under the MIT License.
