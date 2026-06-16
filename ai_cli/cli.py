@@ -1,8 +1,9 @@
-import sys
+import time
 import argparse
 from getpass import getpass
 from ai_cli.agent import AIAgent
 from ai_cli.config import get_api_key, save_api_key
+from rich.live import Live
 
 # --- PHASE 2: Rich UI Imports ---
 from rich.console import Console
@@ -78,10 +79,25 @@ def main():
                 continue
 
             console.print("\n[bold cyan]Assistant:[/bold cyan]")
+
             response = agent.chat(user_input)
 
-            # --- PHASE 2: Render the response as formatted Markdown ---
-            console.print(Markdown(response))
+            # --- PHASE 3: Animated Markdown Streaming ---
+            # We use rich.live to constantly redraw the markdown box as text is "typed"
+            with Live(Markdown(""), refresh_per_second=24, console=console) as live:
+                accumulated_text = ""
+                # Chunking by 3 chars simulates the cadence of actual network tokens
+                chunk_size = 3
+                for i in range(0, len(response), chunk_size):
+                    accumulated_text += response[i : i + chunk_size]
+                    live.update(Markdown(accumulated_text))
+                    time.sleep(0.01)  # Adjust this to make it type faster or slower
+
+            # --- NEW: Display the Telemetry ---
+            if agent.mode == "online" and agent.session_tokens > 0:
+                console.print(
+                    f"\n[dim italic]Session: {agent.session_tokens:,} tokens · ~${agent.session_cost:.5f}[/dim italic]"
+                )
             print()
 
         except KeyboardInterrupt:

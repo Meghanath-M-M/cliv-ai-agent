@@ -1,26 +1,28 @@
+import importlib
+import inspect
 import os
 import logging
 import json
 from pathlib import Path
-from typing import List, Dict, Any
-from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+
+from ai_cli.tools.base import BaseTool
 
 # --- PHASE 2: Rich UI Imports ---
 from rich.console import Console
-from rich.markdown import Markdown
 
 console = Console()
 
 try:
     from groq import Groq
 except ImportError:
-    Groq = None
+    Groq = None  # type: ignore
 
 try:
     import ollama
 except ImportError:
-    ollama = None
+    ollama = None  # type: ignore
 
 load_dotenv()
 
@@ -32,153 +34,21 @@ logging.basicConfig(
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# ==========================================
-# PHASE 3: Object-Oriented Tool Architecture
-# ==========================================
-
-
-class BaseTool:
-    """Base interface for all AI Tools"""
-
-    name: str
-    description: str
-    input_schema: Dict[str, Any]
-
-    def execute(self, **kwargs) -> str:
-        raise NotImplementedError("Tools must implement the execute method")
-
-
-class ReadFileTool(BaseTool):
-    def __init__(self):
-        self.name = "read_file"
-        self.description = "Read the contents of a file at the specified path"
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The path to the file to read",
-                }
-            },
-            "required": ["path"],
-        }
-
-    def execute(self, path: str, **kwargs) -> str:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-            return f"File contents of {path}:\n{content}"
-        except FileNotFoundError:
-            return f"File not found: {path}"
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
-
-
-class ListFilesTool(BaseTool):
-    def __init__(self):
-        self.name = "list_files"
-        self.description = "List all files and directories in the specified path"
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The directory path to list"}
-            },
-            "required": [],
-        }
-
-    def execute(self, path: str = ".", **kwargs) -> str:
-        try:
-            if not os.path.exists(path):
-                return f"Path not found: {path}"
-            items = []
-            for item in sorted(os.listdir(path)):
-                item_path = os.path.join(path, item)
-                if os.path.isdir(item_path):
-                    items.append(f"[DIR]  {item}/")
-                else:
-                    items.append(f"[FILE] {item}")
-            if not items:
-                return f"Empty directory: {path}"
-            return f"Contents of {path}:\n" + "\n".join(items)
-        except Exception as e:
-            return f"Error listing files: {str(e)}"
-
-
-class EditFileTool(BaseTool):
-    def __init__(self):
-        self.name = "edit_file"
-        self.description = "Edit a file by replacing old_text with new_text. Creates the file if it doesn't exist."
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The path to the file to edit",
-                },
-                "old_text": {
-                    "type": "string",
-                    "description": "The text to search for and replace (leave empty to create)",
-                },
-                "new_text": {
-                    "type": "string",
-                    "description": "The text to replace old_text with",
-                },
-            },
-            "required": ["path", "new_text"],
-        }
-
-    def execute(self, path: str, new_text: str, old_text: str = "", **kwargs) -> str:
-        # SAFETY RAIL: Require manual confirmation before modifying disk
-        console.print(
-            f"\n[bold yellow][SYSTEM WARNING][/bold yellow] The AI wants to modify the file: '{path}'"
-        )
-        confirm = input("Allow this change? [y/N]: ").strip().lower()
-        if confirm != "y":
-            return f"Operation blocked: User denied permission to edit {path}."
-
-        try:
-            if os.path.exists(path) and old_text:
-                with open(path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                if old_text not in content:
-                    return f"Text not found in file: {old_text}"
-                content = content.replace(old_text, new_text)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                return f"Successfully edited {path}"
-            else:
-                dir_name = os.path.dirname(path)
-                if dir_name:
-                    os.makedirs(dir_name, exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_text)
-                return f"Successfully created {path}"
-        except Exception as e:
-            return f"Error editing file: {str(e)}"
-
-
-# ==========================================
-# MAIN AGENT CLASS
-# ==========================================
-
 
 class AIAgent:
-    def __init__(self, api_key: str = None, local_model: str = "qwen2.5-coder:3b"):
+    def __init__(self, api_key: Optional[str] = None, local_model: str = "qwen2.5-coder:3b"):
         self.api_key = api_key
         self.local_model = local_model
 
-        # --- PHASE 3: Conversation Persistence ---
+        self.session_tokens = 0
+        self.session_cost = 0.0
+
         self.history_file = Path.home() / ".config" / "ai_cli" / "history.json"
         self.messages: List[Dict[str, Any]] = self._load_history()
 
-        # Initialize OOP Tools
-        self.tools: Dict[str, BaseTool] = {
-            "read_file": ReadFileTool(),
-            "list_files": ListFilesTool(),
-            "edit_file": EditFileTool(),
-        }
+        self.tools: Dict[str, BaseTool] = self._load_tools()
 
-        if self.api_key and Groq:
+        if self.api_key and Groq is not None:
             self.mode = "online"
             self.client = Groq(api_key=self.api_key)
             self.model_name = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -186,6 +56,26 @@ class AIAgent:
             self.mode = "offline"
             if not ollama:
                 logging.warning("Ollama library not found. Offline mode may fail.")
+
+    def _load_tools(self) -> Dict[str, BaseTool]:
+        """Dynamically loads all tools from the ai_cli/tools directory."""
+        tools = {}
+        tools_dir = Path(__file__).parent / "tools"
+
+        for file in tools_dir.glob("*.py"):
+            if file.name.startswith("__") or file.name == "base.py":
+                continue
+
+            module_name = f"ai_cli.tools.{file.stem}"
+            module = importlib.import_module(module_name)
+
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if issubclass(obj, BaseTool) and obj.__module__ == module_name:
+                    instance = obj()
+                    tools[instance.name] = instance
+                    logging.info(f"Dynamically loaded tool: {instance.name}")
+
+        return tools
 
     def _load_history(self) -> List[Dict[str, Any]]:
         """Loads previous conversation from disk."""
@@ -223,7 +113,6 @@ class AIAgent:
             return f"Unknown tool: {tool_name}"
 
         try:
-            # OOP Magic: We unpack the JSON args directly into the class method
             return tool.execute(**tool_input)
         except Exception as e:
             logging.error(f"Error executing {tool_name}: {str(e)}")
@@ -264,18 +153,22 @@ class AIAgent:
                 normalized_tool_calls = []
                 content = None
 
-                # --- PHASE 2: UI/UX Loading Spinner ---
                 with console.status("[bold cyan]Agent is thinking...", spinner="dots"):
                     if self.mode == "online":
                         response = self.client.chat.completions.create(
-                            model=self.model_name,
+                            model=self.model_name,  # type: ignore
                             max_tokens=4096,
-                            messages=[system_msg] + self.messages,
+                            messages=[system_msg] + self.messages,  # type: ignore
                             tools=tool_schemas,
                             tool_choice="auto",
                         )
                         message = response.choices[0].message
                         content = message.content
+
+                        if hasattr(response, "usage") and response.usage:
+                            tokens = response.usage.total_tokens
+                            self.session_tokens += tokens
+                            self.session_cost = (self.session_tokens / 1_000_000) * 0.05
 
                         if message.tool_calls:
                             for tc in message.tool_calls:
@@ -289,7 +182,7 @@ class AIAgent:
                     else:
                         response = ollama.chat(
                             model=self.local_model,
-                            messages=[system_msg] + self.messages,
+                            messages=[system_msg] + self.messages,  # type: ignore
                             tools=tool_schemas,
                         )
 
@@ -329,28 +222,36 @@ class AIAgent:
                                 }
                             )
 
-                # Record assistant response
-                assistant_message = {"role": "assistant"}
+                assistant_message: Dict[str, Any] = {"role": "assistant"}
                 if content is not None:
                     assistant_message["content"] = content
 
                 if normalized_tool_calls:
-                    assistant_message["tool_calls"] = [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                        for tc in normalized_tool_calls
-                    ]
+                    assistant_message["tool_calls"] = []
+                    for tc in normalized_tool_calls:
+                        # Groq expects a string, Ollama expects a dictionary
+                        if self.mode == "offline":
+                            try:
+                                formatted_args = json.loads(tc["arguments"])
+                            except json.JSONDecodeError:
+                                formatted_args = {}
+                        else:
+                            formatted_args = tc["arguments"]
+
+                        assistant_message["tool_calls"].append(
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": formatted_args,
+                                },
+                            }
+                        )
 
                 self.messages.append(assistant_message)
                 self._save_history()
 
-                # Process tools
                 if normalized_tool_calls:
                     for tc in normalized_tool_calls:
                         try:
@@ -371,7 +272,6 @@ class AIAgent:
                         )
                         self._save_history()
                 else:
-                    # Defensive Parsing Shield
                     if content:
                         clean_content = content.strip()
                         if clean_content.startswith("```json"):
