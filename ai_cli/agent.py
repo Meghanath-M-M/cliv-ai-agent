@@ -1,6 +1,7 @@
 import importlib
 import inspect
 import os
+import socket
 import logging
 import json
 from pathlib import Path
@@ -20,9 +21,42 @@ except ImportError:
     Groq = None  # type: ignore
 
 try:
-    import ollama
-except ImportError:
-    ollama = None  # type: ignore
+    from ollama import Client
+
+    def _make_ollama_client(_):
+        return Client()
+
+    def _ollama_chat(client, model, messages, tools=None):
+        return client.chat(model=model, messages=messages, tools=tools or [])
+
+    def _ollama_message(obj):
+        return obj.message
+
+    def _has_tool_calls(msg):
+        return bool(getattr(msg, "tool_calls", None))
+except Exception:
+    try:
+        import ollama
+
+        def _make_ollama_client(_):
+            return ollama
+
+        def _ollama_chat(client, model, messages, tools=None):
+            return client.chat(model=model, messages=messages, tools=tools or [])
+
+        def _ollama_message(obj):
+            return obj.get("message", obj)
+
+        def _has_tool_calls(msg):
+            return bool(getattr(msg, "tool_calls", None) or msg.get("tool_calls"))
+    except ImportError:
+        _make_ollama_client = None
+        _ollama_chat = None
+        _ollama_message = None
+
+        def _has_tool_calls(_):
+            return False  # noqa: E301
+
 
 load_dotenv()
 
@@ -36,7 +70,17 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class AIAgent:
-    def __init__(self, api_key: Optional[str] = None, local_model: str = "qwen2.5-coder:3b"):
+    def _check_internet(self, host="8.8.8.8", port=53, timeout=2) -> bool:
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+            return True
+        except OSError:
+            return False
+
+    def __init__(
+        self, api_key: Optional[str] = None, local_model: str = "qwen2.5-coder:3b"
+    ):
         self.api_key = api_key
         self.local_model = local_model
 
@@ -48,14 +92,18 @@ class AIAgent:
 
         self.tools: Dict[str, BaseTool] = self._load_tools()
 
-        if self.api_key and Groq is not None:
+        if self.api_key and Groq is not None and self._check_internet():
             self.mode = "online"
             self.client = Groq(api_key=self.api_key)
             self.model_name = "meta-llama/llama-4-scout-17b-16e-instruct"
         else:
             self.mode = "offline"
-            if not ollama:
-                logging.warning("Ollama library not found. Offline mode may fail.")
+            if self.api_key and not self._check_internet():
+                logging.warning(
+                    "No internet connection detected. Switching to offline mode."
+                )
+            if _make_ollama_client is None:
+                logging.warning("ollama is unavailable. Offline mode may fail.")
 
     def _load_tools(self) -> Dict[str, BaseTool]:
         """Dynamically loads all tools from the ai_cli/tools directory."""
@@ -118,10 +166,21 @@ class AIAgent:
             logging.error(f"Error executing {tool_name}: {str(e)}")
             return f"Error executing {tool_name}: {str(e)}"
 
+    def _auto_check_mode(self):
+        if self.mode == "online" and not self._check_internet():
+            self.mode = "offline"
+            self.client = None
+            if _make_ollama_client is None:
+                logging.warning(
+                    "Connection lost and ollama unavailable; offline mode may fail."
+                )
+
     def chat(self, user_input: str) -> str:
         logging.info(f"User input: {user_input}")
         self.messages.append({"role": "user", "content": user_input})
         self._save_history()
+
+        self._auto_check_mode()
 
         tool_schemas = [
             {
@@ -180,28 +239,36 @@ class AIAgent:
                                     }
                                 )
                     else:
-                        response = ollama.chat(
-                            model=self.local_model,
-                            messages=[system_msg] + self.messages,  # type: ignore
-                            tools=tool_schemas,
-                        )
-
-                        if hasattr(response, "message") or isinstance(response, dict):
-                            msg_obj = (
-                                response.message
-                                if hasattr(response, "message")
-                                else response.get("message", {})
+                        if _ollama_chat is None:
+                            raise RuntimeError(
+                                "Offline mode requires 'ollama'. Install it and start the Ollama service."
                             )
 
-                            if hasattr(msg_obj, "content"):
-                                content = msg_obj.content
-                                raw_tool_calls = msg_obj.tool_calls or []
-                            else:
-                                content = msg_obj.get("content")
-                                raw_tool_calls = msg_obj.get("tool_calls") or []
+                        client = _make_ollama_client(None)
+                        response = _ollama_chat(
+                            client,
+                            model=self.local_model,
+                            messages=[system_msg] + self.messages,
+                            tools=tool_schemas,
+                        )
+                        msg_obj = _ollama_message(response)
+
+                        if hasattr(msg_obj, "content"):
+                            content = getattr(msg_obj, "content", None)
+                            raw_tool_calls = getattr(msg_obj, "tool_calls", None) or []
+                        elif isinstance(msg_obj, dict):
+                            content = msg_obj.get("content")
+                            raw_tool_calls = msg_obj.get("tool_calls", []) or []
                         else:
-                            content = ""
+                            content = None
                             raw_tool_calls = []
+
+                        if content is None:
+                            content = (
+                                getattr(response, "content", None)
+                                or getattr(response, "text", None)
+                                or ""
+                            )
 
                         for i, tc in enumerate(raw_tool_calls):
                             if hasattr(tc, "function"):
@@ -288,9 +355,14 @@ class AIAgent:
                         ):
                             try:
                                 leaked_json = json.loads(clean_content)
-                                if "name" in leaked_json and "arguments" in leaked_json:
+                                if "name" in leaked_json and (
+                                    "arguments" in leaked_json
+                                    or "parameters" in leaked_json
+                                ):
                                     tool_name = leaked_json["name"]
-                                    tool_args = leaked_json["arguments"]
+                                    tool_args = leaked_json.get(
+                                        "arguments", leaked_json.get("parameters")
+                                    )
 
                                     console.print(
                                         f"\n[dim italic][SYSTEM: Intercepted raw text tool call for '{tool_name}'][/dim italic]"

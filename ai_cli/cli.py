@@ -1,5 +1,6 @@
 import time
 import argparse
+import socket
 from getpass import getpass
 from ai_cli.agent import AIAgent
 from ai_cli.config import get_api_key, save_api_key
@@ -10,6 +11,16 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 console = Console()
+
+
+def check_internet(host="8.8.8.8", port=53, timeout=2):
+    """Safely checks if the device is connected to the internet."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except OSError:
+        return False
 
 
 def main():
@@ -50,7 +61,29 @@ def main():
             )
             api_key = None
 
+    # ... previous logic where you get the api_key ...
+
+    # --- NEW: Automatic Offline Fallback ---
+    if api_key:
+        with console.status(
+            "[dim]Checking network connection...[/dim]", spinner="dots"
+        ):
+            is_online = check_internet()
+
+        if not is_online:
+            console.print(
+                "\n[bold yellow][SYSTEM WARNING][/bold yellow] No internet connection detected!"
+            )
+            console.print(
+                "[bold yellow]Automatically falling back to local OFFLINE mode.[/bold yellow]\n"
+            )
+            # Overriding the key to None forces the AIAgent to use Ollama
+            api_key = None
+
+    # Initialize the agent
     agent = AIAgent(api_key=api_key)
+
+    # ... rest of your UI startup code ...
 
     # UI Polish: Colored Welcome Screen
     console.print("\n[bold blue]🤖 AI Code Assistant[/bold blue]")
