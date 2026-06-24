@@ -384,8 +384,8 @@ class AIAgent:
                                         "arguments", leaked_json.get("parameters")
                                     )
 
-                                    console.print(
-                                        f"\n[dim italic][SYSTEM: Intercepted raw text tool call for '{tool_name}'][/dim italic]"
+                                    logging.info(
+                                        f"Intercepted raw text tool call for '{tool_name}'"
                                     )
                                     result = self._execute_tool(tool_name, tool_args)
 
