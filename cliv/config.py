@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "ai_cli"
+CONFIG_DIR = Path.home() / ".config" / "cliv"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 

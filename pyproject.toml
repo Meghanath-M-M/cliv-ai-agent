@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ai-cli-assistant"
+name = "cliv"
 version = "0.1.0"
 description = "A conversational AI agent that can read, list, and edit files."
 readme = "README.md"
@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "groq",
     "numpy>=2.4.6",
-    "ollama>=0.3.0",
+    "ollama>=0.3.0,<0.5.0",
     "pydantic",
     "pytest>=9.1.0",
     "python-dotenv>=1.2.2",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ai-assist = "ai_cli.cli:main"
+cliv = "cliv.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ai_cli"]
+packages = ["cliv"]

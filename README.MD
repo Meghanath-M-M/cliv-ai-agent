@@ -1,4 +1,4 @@
-# 🤖 AI CLI Assistant
+# 🤖 cliv
 
 A powerful, terminal-based AI coding assistant that can safely read, list, and edit your local files. Built for speed, privacy, and accuracy with a hybrid Online/Offline architecture.
 
@@ -24,8 +24,8 @@ A powerful, terminal-based AI coding assistant that can safely read, list, and e
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/yourusername/ai-cli-assistant.git
-   cd ai-cli-assistant
+git clone https://github.com/yourusername/cliv.git
+    cd cliv
    ```
 
 2. **Sync the environment**
@@ -55,7 +55,7 @@ A powerful, terminal-based AI coding assistant that can safely read, list, and e
 To start the assistant, simply run the global command from anywhere in your terminal:
 
 ```bash
-ai-assist
+cliv
 ```
 
 ### First Run & Configuration
@@ -83,7 +83,7 @@ The assistant uses an array of predefined JSON tool schemas (`read_file`, `list_
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yourusername/ai-cli-assistant/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yourusername/cliv/issues).
 
 ## 📝 License
 

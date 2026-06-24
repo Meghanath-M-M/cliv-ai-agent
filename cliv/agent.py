@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-from ai_cli.tools.base import BaseTool
+from cliv.tools.base import BaseTool
 
 # --- PHASE 2: Rich UI Imports ---
 from rich.console import Console
@@ -60,10 +60,12 @@ except Exception:
 
 load_dotenv()
 
+log_dir = Path.home() / ".config" / "cliv"
+log_dir.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(message)s",
-    handlers=[logging.FileHandler("agent.log")],
+    handlers=[logging.FileHandler(log_dir / "agent.log")],
 )
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -87,7 +89,7 @@ class AIAgent:
         self.session_tokens = 0
         self.session_cost = 0.0
 
-        self.history_file = Path.home() / ".config" / "ai_cli" / "history.json"
+        self.history_file = Path.home() / ".config" / "cliv" / "history.json"
         self.messages: List[Dict[str, Any]] = self._load_history()
 
         self.tools: Dict[str, BaseTool] = self._load_tools()
@@ -106,7 +108,7 @@ class AIAgent:
                 logging.warning("ollama is unavailable. Offline mode may fail.")
 
     def _load_tools(self) -> Dict[str, BaseTool]:
-        """Dynamically loads all tools from the ai_cli/tools directory."""
+        """Dynamically loads all tools from the cliv/tools directory."""
         tools = {}
         tools_dir = Path(__file__).parent / "tools"
 
@@ -114,7 +116,7 @@ class AIAgent:
             if file.name.startswith("__") or file.name == "base.py":
                 continue
 
-            module_name = f"ai_cli.tools.{file.stem}"
+            module_name = f"cliv.tools.{file.stem}"
             module = importlib.import_module(module_name)
 
             for name, obj in inspect.getmembers(module, inspect.isclass):
@@ -130,7 +132,19 @@ class AIAgent:
         if self.history_file.exists():
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    messages = json.load(f)
+                # Normalize tool_calls: ollama expects dict arguments
+                for msg in messages:
+                    if "tool_calls" in msg:
+                        for tc in msg["tool_calls"]:
+                            if "function" in tc and "arguments" in tc["function"]:
+                                args = tc["function"]["arguments"]
+                                if isinstance(args, str):
+                                    try:
+                                        tc["function"]["arguments"] = json.loads(args)
+                                    except json.JSONDecodeError:
+                                        tc["function"]["arguments"] = {}
+                return messages
             except Exception as e:
                 logging.error(f"Failed to load history: {e}")
         return []
@@ -231,11 +245,17 @@ class AIAgent:
 
                         if message.tool_calls:
                             for tc in message.tool_calls:
+                                args = tc.function.arguments
+                                if isinstance(args, str):
+                                    try:
+                                        args = json.loads(args)
+                                    except json.JSONDecodeError:
+                                        args = {}
                                 normalized_tool_calls.append(
                                     {
                                         "id": tc.id,
                                         "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
+                                        "arguments": args,
                                     }
                                 )
                     else:
@@ -278,14 +298,17 @@ class AIAgent:
                                 tc_name = tc["function"]["name"]
                                 args = tc["function"]["arguments"]
 
-                            args_str = (
-                                json.dumps(args) if isinstance(args, dict) else args
-                            )
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except json.JSONDecodeError:
+                                    args = {}
+
                             normalized_tool_calls.append(
                                 {
                                     "id": f"call_{i}",
                                     "name": tc_name,
-                                    "arguments": args_str,
+                                    "arguments": args,
                                 }
                             )
 
@@ -296,14 +319,10 @@ class AIAgent:
                 if normalized_tool_calls:
                     assistant_message["tool_calls"] = []
                     for tc in normalized_tool_calls:
-                        # Groq expects a string, Ollama expects a dictionary
-                        if self.mode == "offline":
-                            try:
-                                formatted_args = json.loads(tc["arguments"])
-                            except json.JSONDecodeError:
-                                formatted_args = {}
-                        else:
-                            formatted_args = tc["arguments"]
+                        formatted_args = tc["arguments"]
+                        # Groq expects string arguments, ollama expects dict
+                        if self.mode == "online" and isinstance(formatted_args, dict):
+                            formatted_args = json.dumps(formatted_args)
 
                         assistant_message["tool_calls"].append(
                             {
@@ -321,11 +340,12 @@ class AIAgent:
 
                 if normalized_tool_calls:
                     for tc in normalized_tool_calls:
-                        try:
-                            function_args = json.loads(tc["arguments"])
-                        except json.JSONDecodeError:
-                            function_args = {}
-
+                        function_args = tc["arguments"]
+                        if isinstance(function_args, str):
+                            try:
+                                function_args = json.loads(function_args)
+                            except json.JSONDecodeError:
+                                function_args = {}
                         result = self._execute_tool(tc["name"], function_args)
                         logging.info(f"Tool result: {result[:500]}...")
 
