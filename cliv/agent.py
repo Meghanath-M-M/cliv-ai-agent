@@ -4,6 +4,8 @@ import os
 import socket
 import logging
 import json
+import copy
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
@@ -133,7 +135,6 @@ class AIAgent:
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
                     messages = json.load(f)
-                # Normalize tool_calls: ollama expects dict arguments
                 for msg in messages:
                     if "tool_calls" in msg:
                         for tc in msg["tool_calls"]:
@@ -211,13 +212,16 @@ class AIAgent:
         system_msg = {
             "role": "system",
             "content": (
-                f"You are {self.local_model}, a helpful coding assistant operating in a terminal environment.\n"
+                f"You are {self.local_model}, an autonomous coding agent operating in a terminal environment.\n"
                 "CRITICAL INSTRUCTIONS:\n"
-                "1. When the user says a simple greeting like 'hi' or 'hello', you MUST respond ONLY with plain English text.\n"
-                "   Example User: 'hi'\n"
-                "   Example Assistant: 'Hello! I am your AI code assistant. How can I help you with your files today?'\n"
-                "2. NEVER output raw JSON in your text responses.\n"
-                "3. To interact with files, use the provided tools silently in the background."
+                "1. When the user says a simple greeting, respond with plain English text.\n"
+                "2. THE DIAGNOSTIC PROTOCOL: If asked to check, fix, or modify a file, you are STRICTLY FORBIDDEN from answering immediately or guessing. You MUST follow this exact sequence:\n"
+                "   - Step A: Use the `read_file` tool to thoroughly inspect the actual contents of the file.\n"
+                "   - Step A-fallback: If `read_file` reports the file was not found, immediately use the `list_files` tool on the current directory before giving up, then suggest the closest matching filename you find.\n"
+                "   - Step B: Use the `edit_file` tool to fix any syntax typos, logical errors, or bugs you find during your inspection.\n"
+                "3. You MUST use the `edit_file` tool to make changes. NEVER print code blocks in your chat response. The user can see the files on their own disk.\n"
+                "4. NEVER output raw JSON, tool names, or argument dictionaries in your text responses. If you intend to call a tool, use the actual tool-calling mechanism — never describe a tool call as plain text.\n"
+                "5. After using a tool, always summarize the result in your own clear, conversational words — never paste a tool's raw output (like a bare list or array) directly back to the user. Explain what you found or changed in a few natural sentences. Keep it concise, but prioritize clarity over brevity — don't sacrifice a helpful explanation just to hit a sentence count. Never echo full code blocks."
             ),
         }
 
@@ -226,38 +230,78 @@ class AIAgent:
                 normalized_tool_calls = []
                 content = None
 
+                # --- API Compatibility Layer ---
+                api_messages = copy.deepcopy(self.messages)
+                for msg in api_messages:
+                    if "tool_calls" in msg:
+                        for tc in msg["tool_calls"]:
+                            if "function" in tc and "arguments" in tc["function"]:
+                                args = tc["function"]["arguments"]
+                                if self.mode == "online":
+                                    if isinstance(args, dict):
+                                        tc["function"]["arguments"] = json.dumps(args)
+                                elif self.mode == "offline":
+                                    if isinstance(args, str):
+                                        try:
+                                            tc["function"]["arguments"] = json.loads(
+                                                args
+                                            )
+                                        except json.JSONDecodeError:
+                                            tc["function"]["arguments"] = {}
+
                 with console.status("[bold cyan]Agent is thinking...", spinner="dots"):
                     if self.mode == "online":
-                        response = self.client.chat.completions.create(
-                            model=self.model_name,  # type: ignore
-                            max_tokens=4096,
-                            messages=[system_msg] + self.messages,  # type: ignore
-                            tools=tool_schemas,
-                            tool_choice="auto",
-                        )
-                        message = response.choices[0].message
-                        content = message.content
+                        try:
+                            response = self.client.chat.completions.create(
+                                model=self.model_name,  # type: ignore
+                                max_tokens=4096,
+                                messages=[system_msg] + api_messages,  # type: ignore
+                                tools=tool_schemas,
+                                tool_choice="auto",
+                            )
+                            message = response.choices[0].message
+                            content = message.content
 
-                        if hasattr(response, "usage") and response.usage:
-                            tokens = response.usage.total_tokens
-                            self.session_tokens += tokens
-                            self.session_cost = (self.session_tokens / 1_000_000) * 0.05
+                            if hasattr(response, "usage") and response.usage:
+                                tokens = response.usage.total_tokens
+                                self.session_tokens += tokens
+                                self.session_cost = (
+                                    self.session_tokens / 1_000_000
+                                ) * 0.05
 
-                        if message.tool_calls:
-                            for tc in message.tool_calls:
-                                args = tc.function.arguments
-                                if isinstance(args, str):
-                                    try:
-                                        args = json.loads(args)
-                                    except json.JSONDecodeError:
-                                        args = {}
-                                normalized_tool_calls.append(
-                                    {
-                                        "id": tc.id,
-                                        "name": tc.function.name,
-                                        "arguments": args,
-                                    }
+                            if message.tool_calls:
+                                for tc in message.tool_calls:
+                                    args = tc.function.arguments
+                                    if isinstance(args, str):
+                                        try:
+                                            args = json.loads(args)
+                                        except json.JSONDecodeError:
+                                            args = {}
+                                    normalized_tool_calls.append(
+                                        {
+                                            "id": tc.id,
+                                            "name": tc.function.name,
+                                            "arguments": args,
+                                        }
+                                    )
+                        except Exception as e:
+                            if (
+                                "503" in str(e)
+                                or "capacity" in str(e).lower()
+                                or "500" in str(e)
+                            ):
+                                logging.warning(
+                                    f"Cloud API unavailable ({e}). Triggering local hardware failover."
                                 )
+                                console.print(
+                                    "\n[dim italic][SYSTEM: Cloud provider over capacity. Seamlessly rerouting to local hardware...][/dim italic]"
+                                )
+                                self.mode = "offline"
+                                self.client = None
+                                continue
+                            else:
+                                raise e
+
                     else:
                         if _ollama_chat is None:
                             raise RuntimeError(
@@ -268,7 +312,7 @@ class AIAgent:
                         response = _ollama_chat(
                             client,
                             model=self.local_model,
-                            messages=[system_msg] + self.messages,
+                            messages=[system_msg] + api_messages,
                             tools=tool_schemas,
                         )
                         msg_obj = _ollama_message(response)
@@ -320,7 +364,6 @@ class AIAgent:
                     assistant_message["tool_calls"] = []
                     for tc in normalized_tool_calls:
                         formatted_args = tc["arguments"]
-                        # Groq expects string arguments, ollama expects dict
                         if self.mode == "online" and isinstance(formatted_args, dict):
                             formatted_args = json.dumps(formatted_args)
 
@@ -370,11 +413,35 @@ class AIAgent:
 
                         clean_content = clean_content.strip()
 
-                        if clean_content.startswith("{") and clean_content.endswith(
-                            "}"
-                        ):
+                        # --- UPGRADED Regex JSON Shield ---
+                        # Widened to also catch malformed leaks where the tool name
+                        # isn't quoted, e.g. {"name": list_files, "arguments": {...}}
+                        json_match = re.search(
+                            r'\{.*"name"\s*:\s*"?[\w\.]+"?.*\}',
+                            clean_content,
+                            re.DOTALL,
+                        )
+
+                        if json_match:
+                            raw_match = json_match.group(0)
+                            leaked_json = None
+
                             try:
-                                leaked_json = json.loads(clean_content)
+                                leaked_json = json.loads(raw_match)
+                            except json.JSONDecodeError:
+                                # Attempt a repair pass: quote bare identifiers used as
+                                # the "name" value (e.g. list_files -> "list_files")
+                                repaired = re.sub(
+                                    r'("name"\s*:\s*)([\w\.]+)(?!")',
+                                    r'\1"\2"',
+                                    raw_match,
+                                )
+                                try:
+                                    leaked_json = json.loads(repaired)
+                                except json.JSONDecodeError:
+                                    leaked_json = None
+
+                            if leaked_json is not None:
                                 if "name" in leaked_json and (
                                     "arguments" in leaked_json
                                     or "parameters" in leaked_json
@@ -384,27 +451,64 @@ class AIAgent:
                                         "arguments", leaked_json.get("parameters")
                                     )
 
+                                    if tool_name not in self.tools:
+                                        # Looked like a tool call but isn't a real tool —
+                                        # don't execute it, and don't show the raw JSON either.
+                                        logging.warning(
+                                            f"Leaked text resembled a tool call but '{tool_name}' is unknown."
+                                        )
+                                        return (
+                                            "I had trouble formatting that response — "
+                                            "could you rephrase your request?"
+                                        )
+
                                     logging.info(
                                         f"Intercepted raw text tool call for '{tool_name}'"
                                     )
                                     result = self._execute_tool(tool_name, tool_args)
 
+                                    # --- THE FIX: Prevent Infinite Loop (Context Hack) ---
+                                    if (
+                                        len(self.messages) > 0
+                                        and self.messages[-1]["role"] == "assistant"
+                                    ):
+                                        self.messages[-1]["tool_calls"] = [
+                                            {
+                                                "id": "call_manual_fallback",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": tool_name,
+                                                    "arguments": tool_args,
+                                                },
+                                            }
+                                        ]
+
                                     self.messages.append(
                                         {
                                             "role": "tool",
-                                            "tool_call_id": "manual_fallback",
+                                            "tool_call_id": "call_manual_fallback",
                                             "name": tool_name,
                                             "content": result,
                                         }
                                     )
                                     self._save_history()
-                                    return f"Action complete: {result}"
+
+                                    # --- THE FIX: Natural Language Recovery ---
+                                    continue
 
                                 elif "message" in leaked_json.get("arguments", {}):
                                     return leaked_json["arguments"]["message"]
-
-                            except Exception:
-                                pass
+                            else:
+                                # The text looked like a tool call (matched the regex)
+                                # but could not be parsed or repaired. Never show raw
+                                # JSON-shaped text to the user — fail safely instead.
+                                logging.warning(
+                                    f"Unrecoverable JSON-like leak in model output: {raw_match[:200]}"
+                                )
+                                return (
+                                    "I had trouble formatting that response — "
+                                    "could you rephrase your request?"
+                                )
 
                     return content if content else ""
 
