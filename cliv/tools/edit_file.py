@@ -1,57 +1,67 @@
-import os
-from typing import Any
-from .base import BaseTool
-from rich.console import Console
+"""Tool to write or patch files on disk."""
 
-console = Console()
+import re
+from pathlib import Path
+from cliv.tools.base import BaseTool
+
 
 class EditFileTool(BaseTool):
-    def __init__(self):
-        self.name = "edit_file"
-        self.description = "Edit a file by replacing old_text with new_text. Creates the file if it doesn't exist."
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The path to the file to edit",
-                },
-                "old_text": {
-                    "type": "string",
-                    "description": "The text to search for and replace (leave empty to create)",
-                },
-                "new_text": {
-                    "type": "string",
-                    "description": "The text to replace old_text with",
-                },
+    name = "edit_file"
+    description = (
+        "Write new content to a file, or replace a specific string within a file. "
+        "If 'old_string' is provided, only that substring is replaced with 'new_string'. "
+        "If 'old_string' is omitted, the entire file is overwritten with 'new_string'."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative or absolute path to the file",
             },
-            "required": ["path", "new_text"],
-        }
+            "old_string": {
+                "type": "string",
+                "description": "The existing text to replace (omit to overwrite entire file)",
+            },
+            "new_string": {
+                "type": "string",
+                "description": "The new text to write or insert",
+            },
+        },
+        "required": ["path", "new_string"],
+    }
 
-    def execute(self, path: str, new_text: str, old_text: str = "", *args: Any, **kwargs: Any) -> str:
-        console.print(
-            f"\n[bold yellow][SYSTEM WARNING][/bold yellow] The AI wants to modify the file: '{path}'"
-        )
-        confirm = input("Allow this change? [y/N]: ").strip().lower()
-        if confirm != "y":
-            return f"Operation blocked: User denied permission to edit {path}."
-
+    def execute(
+        self, path: str, new_string: str, old_string: str = "", **kwargs
+    ) -> str:
         try:
-            if os.path.exists(path) and old_text:
-                with open(path, "r", encoding="utf-8") as f:
+            file_path = Path(path).expanduser().resolve()
+
+            # Security: prevent writing outside home or current project
+            home = Path.home().resolve()
+            cwd = Path.cwd().resolve()
+            allowed_roots = {home, cwd}
+            if not any(str(file_path).startswith(str(r)) for r in allowed_roots):
+                return f"Error: Writing outside allowed directories is blocked: {path}"
+
+            if old_string:
+                # Patch mode
+                if not file_path.exists():
+                    return f"Error: File not found for patching: {path}"
+                with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                if old_text not in content:
-                    return f"Text not found in file: {old_text}"
-                content = content.replace(old_text, new_text)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                return f"Successfully edited {path}"
+                if old_string not in content:
+                    return f"Error: old_string not found in file. File unchanged."
+                new_content = content.replace(old_string, new_string, 1)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                return f"Successfully patched {path}"
             else:
-                dir_name = os.path.dirname(path)
-                if dir_name:
-                    os.makedirs(dir_name, exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_text)
-                return f"Successfully created {path}"
+                # Overwrite mode
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(new_string)
+                return f"Successfully wrote {path}"
+
         except Exception as e:
-            return f"Error editing file: {str(e)}"
+            return f"Error editing file: {e}"

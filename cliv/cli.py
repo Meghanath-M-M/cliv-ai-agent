@@ -1,15 +1,18 @@
+"""
+Terminal UI for cliv.
+Handles startup flow, routing, real streaming output, and session management.
+"""
+
 import sys
-import time
 import argparse
 import socket
 from getpass import getpass
 from cliv.agent import AIAgent
 from cliv.config import get_api_key, save_api_key
-from rich.live import Live
 
-# --- PHASE 2: Rich UI Imports ---
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.live import Live
 
 console = Console()
 
@@ -25,25 +28,22 @@ def check_internet(host="8.8.8.8", port=53, timeout=2):
 
 
 def process_prompt(agent, user_input):
-    """Handles the streaming and rendering of the agent's response."""
+    """Handles the rendering of the agent's response."""
     console.print("\n[bold cyan]cliv:[/bold cyan]")
 
     response = agent.chat(user_input)
 
-    # --- PHASE 3: Animated Markdown Streaming ---
-    with Live(Markdown(""), refresh_per_second=24, console=console) as live:
-        accumulated_text = ""
-        # Chunking by 3 chars simulates the cadence of actual network tokens
-        chunk_size = 3
-        for i in range(0, len(response), chunk_size):
-            accumulated_text += response[i : i + chunk_size]
-            live.update(Markdown(accumulated_text))
-            time.sleep(0.01)  # Adjust this to make it type faster or slower
+    if response:
+        console.print(Markdown(response))
 
     # --- Telemetry Display ---
-    if agent.mode == "online" and agent.session_tokens > 0:
+    if agent.mode == "online" and agent.stats.total_tokens > 0:
         console.print(
-            f"\n[dim italic]Session: {agent.session_tokens:,} tokens · ~${agent.session_cost:.5f}[/dim italic]"
+            f"\n[dim italic]"
+            f"Session: {agent.stats.total_tokens:,} tokens "
+            f"(in: {agent.stats.input_tokens:,}, out: {agent.stats.output_tokens:,}) "
+            f"· ~${agent.stats.cost_usd:.6f}"
+            f"[/dim italic]"
         )
     print()
 
@@ -52,7 +52,6 @@ def main():
     parser = argparse.ArgumentParser(
         description="> cliv_ : Terminal-native intelligence for your local codebase."
     )
-    # Added positional argument for single-shot commands (e.g., cliv "fix app.py")
     parser.add_argument(
         "prompt",
         nargs="?",
@@ -63,6 +62,9 @@ def main():
     )
     parser.add_argument(
         "--offline", action="store_true", help="Force offline mode (use Ollama)"
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging to console"
     )
     args = parser.parse_args()
 
@@ -111,23 +113,22 @@ def main():
             console.print(
                 "[bold yellow]Automatically falling back to local OFFLINE mode.[/bold yellow]\n"
             )
-            # Overriding the key to None forces the AIAgent to use Ollama
             api_key = None
 
     # Initialize the agent
-    agent = AIAgent(api_key=api_key)
+    agent = AIAgent(api_key=api_key, verbose=args.verbose)
 
     # ---------------------------------------------------------
-    # ROUTING LOGIC: Single-shot Command vs. Interactive Loop
+    # ROUTING: Single-shot Command vs. Interactive Loop
     # ---------------------------------------------------------
 
-    # 1. Single-shot execution (e.g., user typed: cliv "run tests")
+    # 1. Single-shot execution
     if args.prompt:
         console.print(f"[dim]Executing command:[/dim] {args.prompt}")
         process_prompt(agent, args.prompt)
         return
 
-    # 2. Interactive REPL Mode (e.g., user just typed: cliv)
+    # 2. Interactive REPL Mode
     console.print("\n[bold cyan]> cliv_[/bold cyan]")
     console.print("==================")
     console.print(f"Mode: [bold green]{agent.mode.upper()}[/bold green]")
@@ -136,7 +137,6 @@ def main():
 
     while True:
         try:
-            # Swapped "You: " for a sleeker terminal prompt
             user_input = input("> ").strip()
 
             if user_input.lower() in ["exit", "quit"]:

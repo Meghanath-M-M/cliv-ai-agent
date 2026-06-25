@@ -1,10 +1,17 @@
+"""Base class for all cliv tools."""
+
+from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-class BaseTool:
-    """Base interface for all AI Tools"""
-    name: str
-    description: str
-    input_schema: Dict[str, Any]
 
-    def execute(self, *args: Any, **kwargs: Any ) -> str:
-        raise NotImplementedError("Tools must implement the execute method")
+class BaseTool(ABC):
+    """Abstract base class for dynamically-loaded tools."""
+
+    name: str = ""
+    description: str = ""
+    input_schema: Dict[str, Any] = {}
+
+    @abstractmethod
+    def execute(self, **kwargs) -> str:
+        """Execute the tool and return a string result."""
+        pass

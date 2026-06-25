@@ -1,55 +1,79 @@
-from unittest.mock import patch, mock_open
-from ai_cli.tools.read_file import ReadFileTool
-from ai_cli.tools.edit_file import EditFileTool
+"""Tests for cliv tools."""
 
-# --- Tests for ReadFileTool ---
+import pytest
+from pathlib import Path
+from cliv.tools.read_file import ReadFileTool
+from cliv.tools.list_files import ListFilesTool
+from cliv.tools.edit_file import EditFileTool
 
-def test_read_file_success():
-    """Test reading a file that exists."""
-    tool = ReadFileTool()
-    mock_content = "def hello_world():\n    print('hello')"
-    
-    # We "mock" the open() function so it returns our fake content instead of reading a real file
-    with patch("builtins.open", mock_open(read_data=mock_content)):
-        result = tool.execute("dummy_path.py")
-        
-    assert "File contents of dummy_path.py:" in result
-    assert "def hello_world():" in result
 
-def test_read_file_not_found():
-    """Test reading a file that does not exist."""
-    tool = ReadFileTool()
-    
-    # We force the open() function to raise a FileNotFoundError
-    with patch("builtins.open", side_effect=FileNotFoundError):
-        result = tool.execute("missing_file.py")
-        
-    assert result == "File not found: missing_file.py"
+class TestReadFile:
+    def test_reads_existing_file(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("hello world")
+        tool = ReadFileTool()
+        result = tool.execute(path=str(f))
+        assert result == "hello world"
 
-# --- Tests for EditFileTool ---
+    def test_file_not_found(self):
+        tool = ReadFileTool()
+        result = tool.execute(path="/nonexistent/file.txt")
+        assert "not found" in result
 
-def test_edit_file_create_new():
-    """Test creating a new file (when old_text is empty)."""
-    tool = EditFileTool()
-    
-    # Mocking os.path.exists to return False (simulating the file doesn't exist)
-    # Mocking input to automatically return 'y' (simulating user confirmation)
-    with patch("os.path.exists", return_value=False), \
-         patch("builtins.input", return_value="y"), \
-         patch("builtins.open", mock_open()) as mock_file:
-         
-        result = tool.execute(path="new_script.py", new_text="print('New File')", old_text="")
-        
-    assert result == "Successfully created new_script.py"
-    # Verify the file was opened in write mode ('w') and the text was written
-    mock_file.assert_called_with("new_script.py", "w", encoding="utf-8")
-    mock_file().write.assert_called_once_with("print('New File')")
+    def test_truncates_large_files(self, tmp_path):
+        f = tmp_path / "big.txt"
+        f.write_text("x" * 200_000)
+        tool = ReadFileTool()
+        result = tool.execute(path=str(f))
+        assert "truncated" in result
+        assert len(result) < 150_000
 
-def test_edit_file_blocked_by_user():
-    """Test that the tool aborts if the user types 'n' at the confirmation prompt."""
-    tool = EditFileTool()
-    
-    with patch("builtins.input", return_value="n"):
-        result = tool.execute(path="critical_system.py", new_text="bad code", old_text="")
-        
-    assert result == "Operation blocked: User denied permission to edit critical_system.py."
+
+class TestListFiles:
+    def test_lists_directory(self, tmp_path):
+        (tmp_path / "a.txt").write_text("a")
+        (tmp_path / "b").mkdir()
+        tool = ListFilesTool()
+        result = tool.execute(path=str(tmp_path))
+        assert "[FILE] a.txt" in result
+        assert "[DIR] b" in result
+
+    def test_empty_directory(self, tmp_path):
+        tool = ListFilesTool()
+        result = tool.execute(path=str(tmp_path))
+        assert result == "(empty directory)"
+
+    def test_not_found(self):
+        tool = ListFilesTool()
+        result = tool.execute(path="/nonexistent")
+        assert "not found" in result
+
+
+class TestEditFile:
+    def test_overwrite_file(self, tmp_path):
+        f = tmp_path / "out.txt"
+        tool = EditFileTool()
+        result = tool.execute(path=str(f), new_string="new content")
+        assert "Successfully wrote" in result
+        assert f.read_text() == "new content"
+
+    def test_patch_file(self, tmp_path):
+        f = tmp_path / "patch.txt"
+        f.write_text("old line\nsecond line")
+        tool = EditFileTool()
+        result = tool.execute(path=str(f), old_string="old line", new_string="new line")
+        assert "Successfully patched" in result
+        assert "new line" in f.read_text()
+
+    def test_patch_old_string_not_found(self, tmp_path):
+        f = tmp_path / "patch.txt"
+        f.write_text("content")
+        tool = EditFileTool()
+        result = tool.execute(path=str(f), old_string="missing", new_string="new")
+        assert "not found" in result
+        assert f.read_text() == "content"
+
+    def test_blocks_outside_allowed_dirs(self, tmp_path):
+        tool = EditFileTool()
+        result = tool.execute(path="/etc/passwd", new_string="hack")
+        assert "blocked" in result

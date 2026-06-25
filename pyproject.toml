@@ -4,22 +4,43 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cliv"
-version = "0.1.0"
-description = "A conversational AI agent that can read, list, and edit files."
-readme = "README.md"
+version = "0.2.0"
+description = "Terminal-native intelligence for your local codebase"
+readme = "README.MD"
+license = {text = "MIT"}
 requires-python = ">=3.11"
+authors = [
+    {name = "Meghanath M M"},
+]
+keywords = ["ai", "agent", "cli", "coding", "llm", "groq", "ollama"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Utilities",
+]
 dependencies = [
-    "groq",
-    "numpy>=2.4.6",
-    "ollama>=0.3.0,<0.5.0",
-    "pydantic",
-    "pytest>=9.1.0",
-    "python-dotenv>=1.2.2",
-    "rich>=15.0.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+online = ["groq>=0.4.0"]
+offline = ["ollama>=0.1.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
 ]
 
 [project.scripts]
 cliv = "cliv.cli:main"
 
-[tool.hatch.build.targets.wheel]
-packages = ["cliv"]
+[project.urls]
+Homepage = "https://github.com/Meghanath-M-M/cliv-ai-agent"
+Repository = "https://github.com/Meghanath-M-M/cliv-ai-agent"
+Issues = "https://github.com/Meghanath-M-M/cliv-ai-agent/issues"

@@ -1,24 +1,35 @@
-from typing import Any
-from .base import BaseTool
+"""Tool to read file contents."""
+
+from pathlib import Path
+from cliv.tools.base import BaseTool
+
 
 class ReadFileTool(BaseTool):
-    def __init__(self):
-        self.name = "read_file"
-        self.description = "Read the contents of a file at the specified path"
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path to the file to read"}
-            },
-            "required": ["path"],
-        }
+    name = "read_file"
+    description = "Read the contents of a file at the specified path"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative or absolute path to the file",
+            }
+        },
+        "required": ["path"],
+    }
 
-    def execute(self, path: str, *args: Any, **kwargs: Any) -> str:
+    def execute(self, path: str, **kwargs) -> str:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            file_path = Path(path).expanduser().resolve()
+            if not file_path.exists():
+                return f"Error: File not found: {path}"
+            if not file_path.is_file():
+                return f"Error: Path is not a file: {path}"
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-            return f"File contents of {path}:\n{content}"
-        except FileNotFoundError:
-            return f"File not found: {path}"
+            # Cap extremely large files
+            if len(content) > 100_000:
+                content = content[:100_000] + "\n\n[...truncated: file exceeds 100KB]"
+            return content
         except Exception as e:
-            return f"Error reading file: {str(e)}"
+            return f"Error reading file: {e}"

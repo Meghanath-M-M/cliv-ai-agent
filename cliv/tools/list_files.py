@@ -1,31 +1,45 @@
-import os
-from .base import BaseTool
+"""Tool to list directory contents."""
+
+from pathlib import Path
+from cliv.tools.base import BaseTool
+
 
 class ListFilesTool(BaseTool):
-    def __init__(self):
-        self.name = "list_files"
-        self.description = "List all files and directories in the specified path"
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The directory path to list"}
-            },
-            "required": [],
-        }
+    name = "list_files"
+    description = "List the contents of a directory"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative or absolute path to the directory (default: current)",
+            }
+        },
+        "required": [],
+    }
 
     def execute(self, path: str = ".", **kwargs) -> str:
         try:
-            if not os.path.exists(path):
-                return f"Path not found: {path}"
-            items = []
-            for item in sorted(os.listdir(path)):
-                item_path = os.path.join(path, item)
-                if os.path.isdir(item_path):
-                    items.append(f"[DIR]  {item}/")
-                else:
-                    items.append(f"[FILE] {item}")
-            if not items:
-                return f"Empty directory: {path}"
-            return f"Contents of {path}:\n" + "\n".join(items)
+            dir_path = Path(path).expanduser().resolve()
+            if not dir_path.exists():
+                return f"Error: Directory not found: {path}"
+            if not dir_path.is_dir():
+                return f"Error: Path is not a directory: {path}"
+
+            entries = []
+            for entry in sorted(dir_path.iterdir()):
+                prefix = "[DIR]" if entry.is_dir() else "[FILE]"
+                size = ""
+                if entry.is_file():
+                    size_bytes = entry.stat().st_size
+                    if size_bytes < 1024:
+                        size = f" ({size_bytes}B)"
+                    elif size_bytes < 1024 * 1024:
+                        size = f" ({size_bytes / 1024:.1f}KB)"
+                    else:
+                        size = f" ({size_bytes / (1024 * 1024):.1f}MB)"
+                entries.append(f"{prefix} {entry.name}{size}")
+
+            return "\n".join(entries) if entries else "(empty directory)"
         except Exception as e:
-            return f"Error listing files: {str(e)}"
+            return f"Error listing directory: {e}"
