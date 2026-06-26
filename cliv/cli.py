@@ -144,8 +144,17 @@ def main():
 
     # Print mode banner
     mode_color = "green" if agent.mode == "online" else "yellow"
-    console.print(f"\n[bold cyan]> cliv_[/bold cyan]")
-    console.print("==================")
+
+    logo = """[bold cyan]
+     ██████╗ ██╗     ██╗██╗   ██╗
+    ██╔════╝ ██║     ██║██║   ██║
+    ██║      ██║     ██║██║   ██║
+    ██║      ██║     ██║╚██╗ ██╔╝
+    ╚██████╗ ███████╗██║ ╚████╔╝
+     ╚═════╝ ╚══════╝╚═╝  ╚═══╝ 
+    [/bold cyan]"""
+    console.print(logo)
+
     console.print(f"Mode: [bold {mode_color}]{agent.mode.upper()}[/bold {mode_color}]")
     if args.yes:
         console.print("[dim]Auto-approve: ENABLED (use with caution)[/dim]")
