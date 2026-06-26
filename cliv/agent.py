@@ -545,15 +545,34 @@ class AIAgent:
             )
             fixed = self._strip_markdown_fences(fixed)
 
-            if fixed.strip() == "NO_BUG_FOUND" or fixed.strip() == content.strip():
+            # Robust NO_BUG_FOUND detection (handles punctuation, whitespace, case)
+            if re.match(r"^\s*NO_BUG_FOUND[\.!]?\s*$", fixed.strip(), re.IGNORECASE):
                 return (
                     f"I inspected `{filename}` for syntax and logic issues. "
                     f"No obvious problems were found."
                 )
 
-            if filename.endswith(".py") and self._check_syntax_python(fixed):
+            if fixed.strip() == content.strip():
                 return (
-                    f"I found potential issues in `{filename}` but the generated fix has syntax errors. "
+                    f"I inspected `{filename}` for syntax and logic issues. "
+                    f"No obvious problems were found."
+                )
+
+            # Retry once if the generated fix has syntax errors
+            syntax_err = self._check_syntax_python(fixed)
+            if filename.endswith(".py") and syntax_err:
+                fixed = self._ollama_generate(
+                    f"The previous fix for '{filename}' has a syntax error: {syntax_err}\n\n"
+                    f"Original code:\n```python\n{content}\n```\n\n"
+                    f"Return ONLY the corrected code. No markdown fences, no explanations:",
+                    history=history,
+                )
+                fixed = self._strip_markdown_fences(fixed)
+                syntax_err = self._check_syntax_python(fixed)
+
+            if filename.endswith(".py") and syntax_err:
+                return (
+                    f"I found potential issues in `{filename}` but the generated fix has syntax errors: {syntax_err}\n"
                     f"Please review manually."
                 )
 
@@ -630,8 +649,8 @@ class AIAgent:
     ) -> str:
         """Simple wrapper for Ollama text generation. No tool calling.
 
-        If history is provided, builds a proper conversation context so the model
-        remembers previous exchanges natively.
+        If history is provided, it is used as-is. The prompt replaces the last
+        user message rather than being appended, preventing duplicate turns.
         """
         if not _OLLAMA_AVAILABLE:
             return "Error: Ollama is not available."
@@ -645,8 +664,17 @@ class AIAgent:
                     content = msg.get("content", "")
                     if role in ("user", "assistant") and content:
                         messages.append({"role": role, "content": content})
-            # Add the current prompt as the latest user message
-            messages.append({"role": "user", "content": prompt})
+                # Replace the last user message with the prompt.
+                # For conversation turns this is a no-op (same content).
+                # For tool-based turns this injects the constructed instruction
+                # (e.g. directory listing + "Summarize...") without duplication.
+                if messages and messages[-1]["role"] == "user":
+                    messages[-1]["content"] = prompt
+                else:
+                    messages.append({"role": "user", "content": prompt})
+            else:
+                # No history: wrap the raw prompt as a single user message
+                messages.append({"role": "user", "content": prompt})
 
             response = ollama.chat(
                 model=self.local_model,
@@ -695,14 +723,21 @@ class AIAgent:
     @staticmethod
     def _strip_markdown_fences(text: str) -> str:
         text = text.strip()
+        # Case 1: entire text is wrapped in fences
         if text.startswith("```"):
             lines = text.split("\n")
             if lines[0].strip().startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
-            text = "\n".join(lines)
-        return text.strip()
+            return "\n".join(lines).strip()
+
+        # Case 2: text contains a code block somewhere (model added explanations)
+        code_block_match = re.search(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
+        if code_block_match:
+            return code_block_match.group(1).strip()
+
+        return text
 
     # ==================================================================
     # ONLINE MODE: Full tool calling via Groq
@@ -895,7 +930,11 @@ class AIAgent:
 
         # OFFLINE MODE: Use simple intent-based flow, NOT Ollama tool calling
         if self.mode == "offline":
-            return self._offline_chat_simple(user_input, history=self.messages)
+            response = self._offline_chat_simple(user_input, history=self.messages)
+            # --- NEW: remember the assistant's reply so next turn has context ---
+            self.messages.append({"role": "assistant", "content": response})
+            self._save_history()
+            return response
 
         # ONLINE MODE: Full agent loop with Groq tool calling
         system_msg = self._build_system_message()
