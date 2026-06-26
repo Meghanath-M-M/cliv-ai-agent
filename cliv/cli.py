@@ -1,6 +1,6 @@
 """
 Terminal UI for cliv.
-Handles startup flow, routing, real streaming output, and session management.
+Handles startup flow, routing, real output, and session management.
 """
 
 import sys
@@ -12,7 +12,6 @@ from cliv.config import get_api_key, save_api_key
 
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.live import Live
 
 console = Console()
 
@@ -20,8 +19,9 @@ console = Console()
 def check_internet(host="8.8.8.8", port=53, timeout=2):
     """Safely checks if the device is connected to the internet."""
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect((host, port))
         return True
     except OSError:
         return False
@@ -66,7 +66,26 @@ def main():
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose logging to console"
     )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Auto-approve all tool operations without prompting",
+    )
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Preview tool operations without applying changes",
+    )
     args = parser.parse_args()
+
+    # Validate conflicting flags
+    if args.yes and args.dry_run:
+        console.print(
+            "[bold red]Error: --yes and --dry-run are mutually exclusive.[/bold red]"
+        )
+        sys.exit(1)
 
     api_key = args.api_key or get_api_key()
     if api_key == "" or args.offline:
@@ -115,8 +134,25 @@ def main():
             )
             api_key = None
 
-    # Initialize the agent
-    agent = AIAgent(api_key=api_key, verbose=args.verbose)
+    # Initialize the agent with flags
+    agent = AIAgent(
+        api_key=api_key,
+        verbose=args.verbose,
+        auto_approve=args.yes,
+        dry_run=args.dry_run,
+    )
+
+    # Print mode banner
+    mode_color = "green" if agent.mode == "online" else "yellow"
+    console.print(f"\n[bold cyan]> cliv_[/bold cyan]")
+    console.print("==================")
+    console.print(f"Mode: [bold {mode_color}]{agent.mode.upper()}[/bold {mode_color}]")
+    if args.yes:
+        console.print("[dim]Auto-approve: ENABLED (use with caution)[/dim]")
+    if args.dry_run:
+        console.print("[dim]Dry-run: ENABLED (no changes will be applied)[/dim]")
+    console.print("Terminal-native intelligence for your local codebase.")
+    console.print("Type 'exit', 'quit', or 'clear' to manage the session.\n")
 
     # ---------------------------------------------------------
     # ROUTING: Single-shot Command vs. Interactive Loop
@@ -129,12 +165,6 @@ def main():
         return
 
     # 2. Interactive REPL Mode
-    console.print("\n[bold cyan]> cliv_[/bold cyan]")
-    console.print("==================")
-    console.print(f"Mode: [bold green]{agent.mode.upper()}[/bold green]")
-    console.print("Terminal-native intelligence for your local codebase.")
-    console.print("Type 'exit', 'quit', or 'clear' to manage the session.\n")
-
     while True:
         try:
             user_input = input("> ").strip()

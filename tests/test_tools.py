@@ -5,6 +5,7 @@ from pathlib import Path
 from cliv.tools.read_file import ReadFileTool
 from cliv.tools.list_files import ListFilesTool
 from cliv.tools.edit_file import EditFileTool
+from cliv.tools.remove_file import RemoveFileTool
 
 
 class TestReadFile:
@@ -76,4 +77,24 @@ class TestEditFile:
     def test_blocks_outside_allowed_dirs(self, tmp_path):
         tool = EditFileTool()
         result = tool.execute(path="/etc/passwd", new_string="hack")
+        assert "blocked" in result
+
+
+class TestRemoveFile:
+    def test_removes_existing_file(self, tmp_path):
+        f = tmp_path / "delete_me.txt"
+        f.write_text("bye")
+        tool = RemoveFileTool()
+        result = tool.execute(path=str(f))
+        assert "Successfully removed" in result
+        assert not f.exists()
+
+    def test_file_not_found(self, tmp_path):
+        tool = RemoveFileTool()
+        result = tool.execute(path=str(tmp_path / "nope.txt"))
+        assert "not found" in result
+
+    def test_blocks_outside_allowed_dirs(self):
+        tool = RemoveFileTool()
+        result = tool.execute(path="/etc/passwd")
         assert "blocked" in result

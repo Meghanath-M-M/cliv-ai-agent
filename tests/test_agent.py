@@ -12,7 +12,11 @@ from cliv.tools.base import BaseTool
 class DummyTool(BaseTool):
     name = "dummy"
     description = "A dummy tool for testing"
-    input_schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    input_schema = {
+        "type": "object",
+        "properties": {"x": {"type": "string"}},
+        "required": ["x"],
+    }
 
     def execute(self, x: str, **kwargs) -> str:
         return f"dummy_result: {x}"
@@ -50,17 +54,23 @@ class TestInit:
         agent = AIAgent(api_key=None)
         assert agent.mode == "offline"
 
+    def test_auto_approve_flag(self):
+        agent = AIAgent(api_key=None, auto_approve=True)
+        assert agent.auto_approve is True
+
+    def test_dry_run_flag(self):
+        agent = AIAgent(api_key=None, dry_run=True)
+        assert agent.dry_run is True
+
 
 # ------------------------------------------------------------------
 # History
 # ------------------------------------------------------------------
 class TestHistory:
-    @patch("cliv.agent.HISTORY_FILE")
-    def test_load_history_normalizes_args(self, mock_hist_file, tmp_path):
-        mock_hist_file.__str__ = lambda self: str(tmp_path / "history.json")
-        mock_hist_file.exists = lambda self: True
-        mock_hist_file.open = lambda *a, **k: mock_open(
-            read_data=json.dumps(
+    def test_load_history_normalizes_args(self, tmp_path):
+        hist_path = tmp_path / "history.json"
+        hist_path.write_text(
+            json.dumps(
                 [
                     {
                         "role": "assistant",
@@ -77,13 +87,24 @@ class TestHistory:
                     }
                 ]
             )
-        )()
+        )
 
-        agent = AIAgent(api_key=None)
-        assert len(agent.messages) == 1
-        args = agent.messages[0]["tool_calls"][0]["function"]["arguments"]
-        assert isinstance(args, dict)
-        assert args["x"] == "hello"
+        # Patch the module-level HISTORY_FILE constant with the real tmp_path
+        # Path object itself. The production code calls the builtin
+        # open(HISTORY_FILE, ...) and HISTORY_FILE.exists() -- both work
+        # natively on a real Path, so there's no need to hand-fake a mock
+        # with .open()/.exists() attributes. The previous version of this
+        # test stubbed mock_hist_file.open(...) as a *method*, but the real
+        # code calls the global open(HISTORY_FILE, ...) instead -- that
+        # mismatch meant the mock was never actually exercised, and the
+        # agent ended up reading empty/garbage content instead of the
+        # JSON this test wrote to tmp_path.
+        with patch("cliv.agent.HISTORY_FILE", hist_path):
+            agent = AIAgent(api_key=None)
+            assert len(agent.messages) == 1
+            args = agent.messages[0]["tool_calls"][0]["function"]["arguments"]
+            assert isinstance(args, dict)
+            assert args["x"] == "hello"
 
     def test_clear_history(self, tmp_path):
         with patch("cliv.agent.HISTORY_FILE", tmp_path / "history.json"):
@@ -132,6 +153,34 @@ class TestToolExecution:
             "write_file", {"path": "test.txt", "content": "hello"}
         )
         assert "cancelled" in result
+
+    def test_auto_approve_bypasses_prompt(self):
+        agent = AIAgent(api_key=None, auto_approve=True)
+        agent.tools["write_file"] = WriteTool()
+        result = agent._execute_tool(
+            "write_file", {"path": "test.txt", "content": "hello"}
+        )
+        assert "wrote" in result
+
+    def test_dry_run_returns_preview(self):
+        agent = AIAgent(api_key=None, dry_run=True)
+        agent.tools["write_file"] = WriteTool()
+        result = agent._execute_tool(
+            "write_file", {"path": "test.txt", "content": "hello"}
+        )
+        assert "DRY RUN" in result
+        assert "Would execute" in result
+
+    def test_malformed_tool_call_non_dict_args(self):
+        agent = AIAgent(api_key=None)
+        result = agent._execute_tool("dummy", "not_a_dict")
+        assert "Malformed tool call" in result
+
+    def test_malformed_tool_call_missing_required_args(self):
+        agent = AIAgent(api_key=None)
+        agent.tools["dummy"] = DummyTool()
+        result = agent._execute_tool("dummy", {})
+        assert "Missing required arguments" in result
 
 
 # ------------------------------------------------------------------
@@ -242,3 +291,19 @@ class TestCostTracking:
         assert stats.input_tokens == 1000
         assert stats.output_tokens == 500
         assert abs(stats.cost_usd - 0.00028) < 1e-9
+
+
+# ------------------------------------------------------------------
+# Syntax Checking
+# ------------------------------------------------------------------
+class TestSyntaxChecking:
+    def test_valid_python(self):
+        agent = AIAgent(api_key=None)
+        result = agent._check_syntax_python("def foo():\n    return 1")
+        assert result is None
+
+    def test_invalid_python(self):
+        agent = AIAgent(api_key=None)
+        result = agent._check_syntax_python("def foo():\n    returnbmm 1")
+        assert "Syntax error" in result
+        assert "returnbmm" in result
