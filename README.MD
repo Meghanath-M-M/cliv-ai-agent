@@ -140,7 +140,7 @@ Small local models (3B parameters) often hallucinate tool calls as plain text JS
 {"name": "read_file", "arguments": {"path": "main.py"}}
 ```
 
-`cliv` detects this pattern, strips markdown fences, parses the JSON, and executes the tool — turning a crash into a successful operation, entirely behind the scenes. This makes `qwen2.5-coder:3b` reliably usable for real agentic workflows without ever surfacing the recovery to the user.
+`cliv` detects this pattern, strips markdown fences, parses the JSON, and executes the tool — turning a crash into a successful operation, entirely behind the scenes. This makes `llama3.1:8b` reliably usable for real agentic workflows without ever surfacing the recovery to the user.
 
 ---
 
