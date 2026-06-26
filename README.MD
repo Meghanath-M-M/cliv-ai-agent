@@ -13,7 +13,7 @@ A powerful, terminal-based AI coding assistant that autonomously reads, edits, a
 
 ## ✨ Features
 
-- 🌐 **Hybrid Execution** — Run blazingly fast in the cloud via the Groq API (`llama-4-scout`), or 100% privately offline using your local hardware via Ollama (`qwen2.5-coder:3b`). No internet required in offline mode.
+- 🌐 **Hybrid Execution** — Run blazingly fast in the cloud via the Groq API (`llama-4-scout`), or 100% privately offline using your local hardware via Ollama (`llama3.1:8b`). No internet required in offline mode.
 
 - ⚡ **Single-Shot or Interactive** — Run a one-off command directly from your shell (`cliv "fix the bug in main.py"`), or drop into a full conversational REPL session that remembers context across turns.
 
