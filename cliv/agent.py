@@ -243,7 +243,7 @@ class AIAgent:
 
     def _request_approval(self, tool_name: str, tool_input: Dict[str, Any]) -> bool:
         if self.auto_approve:
-            console.print(f"[dim]Auto-approved {tool_name} ( --yes mode )[/dim]")
+            console.print(f"[dim]Auto-approved {tool_name} (--yes mode)[/dim]")
             return True
         if self.dry_run:
             console.print(
@@ -253,13 +253,16 @@ class AIAgent:
                 f"\n[dim]No changes applied (dry-run mode).[/dim]"
             )
             return True
+
         console.print(
             f"\n[bold yellow]Approval Required[/bold yellow]"
             f"\nTool: [cyan]{tool_name}[/cyan]"
             f"\nArgs: [dim]{json.dumps(tool_input, indent=2)}[/dim]"
         )
         try:
-            response = input("Proceed? [y/N]: ").strip().lower()
+            console.print("[bold yellow]Proceed? [Y/N]: [/bold yellow]", end="")
+            response = input().strip().lower()
+
             return response in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             return False
@@ -445,12 +448,12 @@ class AIAgent:
 
         # --- CONVERSATION ---
         if intent == "conversation":
-            # Use actual conversation history for memory
             return self._ollama_generate(user_input, history=history)
 
         # --- LIST DIRECTORY ---
         if intent == "list_dir":
-            listing = self._execute_tool("list_files", {"path": "."})
+            with console.status("[dim]Listing files...", spinner="dots"):
+                listing = self._execute_tool("list_files", {"path": "."})
             return self._ollama_generate(
                 f"The user asked what's in the current directory.\n\n"
                 f"Here is the directory listing:\n{listing}\n\n"
@@ -465,9 +468,11 @@ class AIAgent:
             resolved = self._resolve_file(filename)
             if resolved:
                 filename = resolved
-            content = self._execute_tool("read_file", {"path": filename})
+            with console.status(f"[dim]Reading {filename}...", spinner="dots"):
+                content = self._execute_tool("read_file", {"path": filename})
             if content.startswith("Error:"):
-                listing = self._execute_tool("list_files", {"path": "."})
+                with console.status("[dim]Listing files...", spinner="dots"):
+                    listing = self._execute_tool("list_files", {"path": "."})
                 return (
                     f"Could not find '{filename}'. Here's what's in the current directory:\n\n"
                     f"{listing}"
@@ -483,13 +488,15 @@ class AIAgent:
         if intent == "file_create":
             if not filename:
                 return "I need to know what file to create. Please specify a filename."
-            content = self._ollama_generate(
-                f"Generate the complete content for a file named '{filename}' "
-                f"based on this request: '{user_input}'. "
-                f"Output ONLY the raw file content. No markdown fences, no explanations.",
-                history=history,
-            )
+            with console.status("[dim]Generating file content...", spinner="dots"):
+                content = self._ollama_generate(
+                    f"Generate the complete content for a file named '{filename}' "
+                    f"based on this request: '{user_input}'. "
+                    f"Output ONLY the raw file content. No markdown fences, no explanations.",
+                    history=history,
+                )
             content = self._strip_markdown_fences(content)
+            # NO spinner — approval prompt needs clean terminal
             result = self._execute_tool(
                 "edit_file", {"path": filename, "new_string": content}
             )
@@ -507,9 +514,11 @@ class AIAgent:
             resolved = self._resolve_file(filename)
             if resolved:
                 filename = resolved
-            content = self._execute_tool("read_file", {"path": filename})
+            with console.status(f"[dim]Reading {filename}...", spinner="dots"):
+                content = self._execute_tool("read_file", {"path": filename})
             if content.startswith("Error:"):
-                listing = self._execute_tool("list_files", {"path": "."})
+                with console.status("[dim]Listing files...", spinner="dots"):
+                    listing = self._execute_tool("list_files", {"path": "."})
                 return (
                     f"Could not find '{filename}'. Here's what's in the current directory:\n\n"
                     f"{listing}"
@@ -521,18 +530,20 @@ class AIAgent:
                 syntax_error = self._check_syntax_python(content)
 
             if syntax_error:
-                fixed = self._ollama_generate(
-                    f"The file '{filename}' has a syntax error:\n{syntax_error}\n\n"
-                    f"Code:\n```python\n{content}\n```\n\n"
-                    f"Output ONLY the corrected code. No explanations, no markdown fences:",
-                    history=history,
-                )
+                with console.status("[dim]Generating syntax fix...", spinner="dots"):
+                    fixed = self._ollama_generate(
+                        f"The file '{filename}' has a syntax error:\n{syntax_error}\n\n"
+                        f"Code:\n```python\n{content}\n```\n\n"
+                        f"Output ONLY the corrected code. No explanations, no markdown fences:",
+                        history=history,
+                    )
                 fixed = self._strip_markdown_fences(fixed)
                 if self._check_syntax_python(fixed):
                     return (
                         f"Found a syntax error in `{filename}`: {syntax_error}\n\n"
                         f"I generated a fix but it still has errors. Please review manually."
                     )
+                # NO spinner — approval needs clean terminal
                 result = self._execute_tool(
                     "edit_file",
                     {"path": filename, "old_string": content, "new_string": fixed},
@@ -545,15 +556,16 @@ class AIAgent:
                 return f"{summary}\n\n{result}"
 
             # No syntax error - check for logic bugs
-            fixed = self._ollama_generate(
-                f"You are a senior software engineer.\n\n"
-                f"User request: {user_input}\n"
-                f"File: {filename}\n"
-                f"Code:\n```python\n{content}\n```\n\n"
-                f"If there are bugs (logic errors, wrong operators, missing imports, etc.), "
-                f"return ONLY the corrected code. If no bugs, return EXACTLY: NO_BUG_FOUND",
-                history=history,
-            )
+            with console.status("[dim]Checking for logic bugs...", spinner="dots"):
+                fixed = self._ollama_generate(
+                    f"You are a senior software engineer.\n\n"
+                    f"User request: {user_input}\n"
+                    f"File: {filename}\n"
+                    f"Code:\n```python\n{content}\n```\n\n"
+                    f"If there are bugs (logic errors, wrong operators, missing imports, etc.), "
+                    f"return ONLY the corrected code. If no bugs, return EXACTLY: NO_BUG_FOUND",
+                    history=history,
+                )
             fixed = self._strip_markdown_fences(fixed)
 
             # Robust NO_BUG_FOUND detection (handles punctuation, whitespace, case)
@@ -572,12 +584,13 @@ class AIAgent:
             # Retry once if the generated fix has syntax errors
             syntax_err = self._check_syntax_python(fixed)
             if filename.endswith(".py") and syntax_err:
-                fixed = self._ollama_generate(
-                    f"The previous fix for '{filename}' has a syntax error: {syntax_err}\n\n"
-                    f"Original code:\n```python\n{content}\n```\n\n"
-                    f"Return ONLY the corrected code. No markdown fences, no explanations:",
-                    history=history,
-                )
+                with console.status("[dim]Retrying fix...", spinner="dots"):
+                    fixed = self._ollama_generate(
+                        f"The previous fix for '{filename}' has a syntax error: {syntax_err}\n\n"
+                        f"Original code:\n```python\n{content}\n```\n\n"
+                        f"Return ONLY the corrected code. No markdown fences, no explanations:",
+                        history=history,
+                    )
                 fixed = self._strip_markdown_fences(fixed)
                 syntax_err = self._check_syntax_python(fixed)
 
@@ -587,6 +600,7 @@ class AIAgent:
                     f"Please review manually."
                 )
 
+            # NO spinner — approval needs clean terminal
             result = self._execute_tool(
                 "edit_file",
                 {"path": filename, "old_string": content, "new_string": fixed},
@@ -605,8 +619,8 @@ class AIAgent:
             resolved = self._resolve_file(filename)
             if resolved:
                 filename = resolved
+            # NO spinner — approval needs clean terminal
             result = self._execute_tool("remove_file", {"path": filename})
-            # Only show "Removed" prefix if actually succeeded
             if "cancelled" in result.lower() or "error" in result.lower():
                 return result
             return f"Removed `{filename}`.\n\n{result}"
@@ -619,24 +633,20 @@ class AIAgent:
             resolved_old = self._resolve_file(old_name)
             if resolved_old:
                 old_name = resolved_old
-            # Read old file
+            # NO spinner — approval may be needed for edit_file and remove_file
             file_content = self._execute_tool("read_file", {"path": old_name})
             if file_content.startswith("Error:"):
                 listing = self._execute_tool("list_files", {"path": "."})
                 return f"Could not find '{old_name}'. Here's what's in the current directory:\n\n{listing}"
-            # Create new file
             create_result = self._execute_tool(
                 "edit_file", {"path": new_name, "new_string": file_content}
             )
             if "error" in create_result.lower():
                 return create_result
-            # Remove old file
             remove_result = self._execute_tool("remove_file", {"path": old_name})
             if "cancelled" in remove_result.lower():
-                # Rollback: remove the new file if old file removal was cancelled
                 self._execute_tool("remove_file", {"path": new_name})
                 return f"Rename cancelled. {remove_result}"
-            # Clean up raw tool output for user display
             create_msg = create_result.replace("Successfully wrote", "Created").replace(
                 "Error:", "Failed to create:"
             )
@@ -668,32 +678,29 @@ class AIAgent:
 
         messages = []
         if history and len(history) > 0:
-            # Convert our history format to Ollama format
-            # Only include user and assistant messages (skip tool messages)
-            for msg in history[-10:]:  # Last 10 messages for context
+            for msg in history[-10:]:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 if role in ("user", "assistant") and content:
                     messages.append({"role": role, "content": content})
-            # Replace the last user message with the prompt.
-            # For conversation turns this is a no-op (same content).
-            # For tool-based turns this injects the constructed instruction
-            # (e.g. directory listing + "Summarize...") without duplication.
             if messages and messages[-1]["role"] == "user":
                 messages[-1]["content"] = prompt
             else:
                 messages.append({"role": "user", "content": prompt})
         else:
-            # No history: wrap the raw prompt as a single user message
             messages.append({"role": "user", "content": prompt})
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = ollama.chat(
-                    model=self.local_model,
-                    messages=messages,
-                )
+                with console.status(
+                    "[bold cyan]Agent is thinking...",
+                    spinner="dots",
+                ):
+                    response = ollama.chat(
+                        model=self.local_model,
+                        messages=messages,
+                    )
                 return response.message.content or ""
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -747,7 +754,6 @@ class AIAgent:
     @staticmethod
     def _strip_markdown_fences(text: str) -> str:
         text = text.strip()
-        # Case 1: entire text is wrapped in fences
         if text.startswith("```"):
             lines = text.split("\n")
             if lines[0].strip().startswith("```"):
@@ -756,7 +762,6 @@ class AIAgent:
                 lines = lines[:-1]
             return "\n".join(lines).strip()
 
-        # Case 2: text contains a code block somewhere (model added explanations)
         code_block_match = re.search(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
         if code_block_match:
             return code_block_match.group(1).strip()
@@ -955,7 +960,6 @@ class AIAgent:
         # OFFLINE MODE: Use simple intent-based flow, NOT Ollama tool calling
         if self.mode == "offline":
             response = self._offline_chat_simple(user_input, history=self.messages)
-            # --- remember the assistant's reply so next turn has context ---
             self.messages.append({"role": "assistant", "content": response})
             self._save_history()
             return response
