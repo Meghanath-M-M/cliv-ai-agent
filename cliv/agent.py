@@ -300,13 +300,14 @@ class AIAgent:
         lowered = user_input.lower().strip()
 
         # --- CONVERSATION (highest priority) ---
+        # NOTE: patterns accept common abbreviations: u/you, ur/your, r/are
         conv_patterns = [
             r"^\s*(hi+|hello|hey|greetings|howdy|hola|yo|sup)\b",
-            r"^\s*(who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name)",
-            r"^\s*(what\s+can\s+you\s+do|what\s+are\s+your\s+capabilities|how\s+can\s+you\s+help)",
-            r"^\s*(how\s+are\s+you|how's\s+it\s+going|whats\s+up|what's\s+up)",
-            r"^\s*(can\s+you\s+help|could\s+you\s+help)\s*$",
-            r"^\s*(thanks?|thank\s+you|thx|ty)\b",
+            r"^\s*(who\s+(?:are|r)\s+(?:you|u)|what\s+(?:are|r)\s+(?:you|u)|what\s+is\s+(?:your|ur)\s+name)",
+            r"^\s*(what\s+can\s+(?:you|u)\s+do|what\s+(?:are|r)\s+(?:your|ur)\s+capabilities|how\s+can\s+(?:you|u)\s+help)",
+            r"^\s*(how\s+(?:are|r)\s+(?:you|u)|how's\s+it\s+going|whats\s+up|what's\s+up)",
+            r"^\s*(can\s+(?:you|u)\s+help|could\s+(?:you|u)\s+help)\s*$",
+            r"^\s*(thanks?|thank\s+(?:you|u)|thx|ty)\b",
             r"^\s*(bye|goodbye|see\s+ya|cya|later|peace)\b",
             r"^\s*(ok|okay|cool|nice|great|awesome|good\s+job|well\s+done)\b",
         ]
