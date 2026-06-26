@@ -45,7 +45,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
 # 3. (Optional) Pull the offline model
-ollama pull qwen2.5-coder:3b
+ollama pull llama3.1:8b                
 
 # 4. Run
 cliv
