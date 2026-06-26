@@ -12,6 +12,7 @@ import json
 import copy
 import re
 import ast
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
@@ -299,28 +300,35 @@ class AIAgent:
         """
         lowered = user_input.lower().strip()
 
-        # --- CONVERSATION (highest priority) ---
-        # NOTE: patterns accept common abbreviations: u/you, ur/your, r/are
-        conv_patterns = [
-            r"^\s*(hi+|hello|hey|greetings|howdy|hola|yo|sup)\b",
-            r"^\s*(who\s+(?:are|r)\s+(?:you|u)|what\s+(?:are|r)\s+(?:you|u)|what\s+is\s+(?:your|ur)\s+name)",
-            r"^\s*(what\s+can\s+(?:you|u)\s+do|what\s+(?:are|r)\s+(?:your|ur)\s+capabilities|how\s+can\s+(?:you|u)\s+help)",
-            r"^\s*(how\s+(?:are|r)\s+(?:you|u)|how's\s+it\s+going|whats\s+up|what's\s+up)",
-            r"^\s*(can\s+(?:you|u)\s+help|could\s+(?:you|u)\s+help)\s*$",
-            r"^\s*(thanks?|thank\s+(?:you|u)|thx|ty)\b",
-            r"^\s*(bye|goodbye|see\s+ya|cya|later|peace)\b",
-            r"^\s*(ok|okay|cool|nice|great|awesome|good\s+job|well\s+done)\b",
-        ]
-        for pattern in conv_patterns:
-            if re.search(pattern, lowered):
-                return ("conversation", None)
-
-        # Extract any filename with extension from the input
+        # Extract any filename with extension from the input FIRST
         file_exts = r"(?:py|js|ts|html|css|md|txt|json|yaml|yml|sh|rs|go|java|cpp|c|h)"
         file_match = re.search(
             r"['\"]?([\w\-\./]+\.(?:" + file_exts + r"))['\"]?", lowered
         )
         extracted_file = file_match.group(1) if file_match else None
+
+        # --- PURE SOCIAL (always conversation) ---
+        social_patterns = [
+            r"^\s*(hi+|hello|hey|greetings|howdy|hola|yo|sup)\b",
+            r"^\s*(thanks?|thank\s+(?:you|u)|thx|ty)\b",
+            r"^\s*(bye|goodbye|see\s+ya|cya|later|peace)\b",
+            r"^\s*(ok|okay|cool|nice|great|awesome|good\s+job|well\s+done)\b",
+        ]
+        for pattern in social_patterns:
+            if re.search(pattern, lowered):
+                return ("conversation", None)
+
+        # --- CONVERSATION (only if no file mentioned) ---
+        if not extracted_file:
+            conv_patterns = [
+                r"^\s*(who\s+(?:are|r)\s+(?:you|u)|what\s+(?:are|r)\s+(?:you|u)|what\s+is\s+(?:your|ur)\s+name)",
+                r"^\s*(what\s+can\s+(?:you|u)\s+do|what\s+(?:are|r)\s+(?:your|ur)\s+capabilities|how\s+can\s+(?:you|u)\s+help)",
+                r"^\s*(how\s+(?:are|r)\s+(?:you|u)|how's\s+it\s+going|whats\s+up|what's\s+up)",
+                r"^\s*(can\s+(?:you|u)\s+help|could\s+(?:you|u)\s+help)\s*$",
+            ]
+            for pattern in conv_patterns:
+                if re.search(pattern, lowered):
+                    return ("conversation", None)
 
         # --- LIST DIRECTORY ---
         if (
@@ -415,8 +423,10 @@ class AIAgent:
                 k in lowered for k in ["create", "make", "write", "generate", "build"]
             ):
                 return ("file_create", extracted_file)
+            # Default: if a file is mentioned but no keywords matched, treat as read
+            return ("file_read", extracted_file)
 
-        return ("unknown", extracted_file)
+        return ("unknown", None)
 
     # ==================================================================
     # OFFLINE MODE: Direct tool execution (NO Ollama tool calling)
@@ -655,36 +665,49 @@ class AIAgent:
         """
         if not _OLLAMA_AVAILABLE:
             return "Error: Ollama is not available."
-        try:
-            messages = []
-            if history and len(history) > 0:
-                # Convert our history format to Ollama format
-                # Only include user and assistant messages (skip tool messages)
-                for msg in history[-10:]:  # Last 10 messages for context
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    if role in ("user", "assistant") and content:
-                        messages.append({"role": role, "content": content})
-                # Replace the last user message with the prompt.
-                # For conversation turns this is a no-op (same content).
-                # For tool-based turns this injects the constructed instruction
-                # (e.g. directory listing + "Summarize...") without duplication.
-                if messages and messages[-1]["role"] == "user":
-                    messages[-1]["content"] = prompt
-                else:
-                    messages.append({"role": "user", "content": prompt})
-            else:
-                # No history: wrap the raw prompt as a single user message
-                messages.append({"role": "user", "content": prompt})
 
-            response = ollama.chat(
-                model=self.local_model,
-                messages=messages,
-            )
-            return response.message.content or ""
-        except Exception as e:
-            logging.error(f"Ollama generation failed: {e}")
-            return f"Error: {e}"
+        messages = []
+        if history and len(history) > 0:
+            # Convert our history format to Ollama format
+            # Only include user and assistant messages (skip tool messages)
+            for msg in history[-10:]:  # Last 10 messages for context
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+            # Replace the last user message with the prompt.
+            # For conversation turns this is a no-op (same content).
+            # For tool-based turns this injects the constructed instruction
+            # (e.g. directory listing + "Summarize...") without duplication.
+            if messages and messages[-1]["role"] == "user":
+                messages[-1]["content"] = prompt
+            else:
+                messages.append({"role": "user", "content": prompt})
+        else:
+            # No history: wrap the raw prompt as a single user message
+            messages.append({"role": "user", "content": prompt})
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = ollama.chat(
+                    model=self.local_model,
+                    messages=messages,
+                )
+                return response.message.content or ""
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 1 * (attempt + 1)
+                    logging.warning(
+                        f"Ollama call failed (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {wait}s: {e}"
+                    )
+                    time.sleep(wait)
+                else:
+                    logging.error(
+                        f"Ollama generation failed after {max_retries} attempts: {e}"
+                    )
+                    return f"Error: {e}"
 
     def _check_syntax_python(self, code: str) -> Optional[str]:
         try:
@@ -932,7 +955,7 @@ class AIAgent:
         # OFFLINE MODE: Use simple intent-based flow, NOT Ollama tool calling
         if self.mode == "offline":
             response = self._offline_chat_simple(user_input, history=self.messages)
-            # --- NEW: remember the assistant's reply so next turn has context ---
+            # --- remember the assistant's reply so next turn has context ---
             self.messages.append({"role": "assistant", "content": response})
             self._save_history()
             return response
