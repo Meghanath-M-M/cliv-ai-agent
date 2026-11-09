@@ -1,26 +1,30 @@
 """Tool to list directory contents."""
 
-from pathlib import Path
+from cliv.security import is_sensitive_path, resolve_project_path
 from cliv.tools.base import BaseTool
 
 
 class ListFilesTool(BaseTool):
     name = "list_files"
-    description = "List the contents of a directory"
+    description = "List the contents of a directory inside the project"
     input_schema = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Relative or absolute path to the directory (default: current)",
+                "description": "Path to the directory relative to the project root (default: current)",
             }
         },
         "required": [],
     }
 
     def execute(self, path: str = ".", **kwargs) -> str:
+        dir_path, error = resolve_project_path(path)
+        if error:
+            return error
+        assert dir_path is not None
+
         try:
-            dir_path = Path(path).expanduser().resolve()
             if not dir_path.exists():
                 return f"Error: Directory not found: {path}"
             if not dir_path.is_dir():
@@ -28,6 +32,9 @@ class ListFilesTool(BaseTool):
 
             entries = []
             for entry in sorted(dir_path.iterdir()):
+                # Never advertise secrets, even when read access is blocked.
+                if is_sensitive_path(entry):
+                    continue
                 prefix = "[DIR]" if entry.is_dir() else "[FILE]"
                 size = ""
                 if entry.is_file():
@@ -41,5 +48,5 @@ class ListFilesTool(BaseTool):
                 entries.append(f"{prefix} {entry.name}{size}")
 
             return "\n".join(entries) if entries else "(empty directory)"
-        except Exception as e:
-            return f"Error listing directory: {e}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Error listing directory: {exc}"

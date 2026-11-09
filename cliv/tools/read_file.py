@@ -1,35 +1,37 @@
 """Tool to read file contents."""
 
-from pathlib import Path
+from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
 
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Read the contents of a file at the specified path"
+    description = "Read the contents of a file inside the project directory"
     input_schema = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Relative or absolute path to the file",
+                "description": "Path to the file, relative to the project root",
             }
         },
         "required": ["path"],
     }
 
     def execute(self, path: str, **kwargs) -> str:
+        file_path, error = resolve_project_path(path)
+        if error:
+            return error
+        assert file_path is not None
+
         try:
-            file_path = Path(path).expanduser().resolve()
             if not file_path.exists():
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
                 return f"Error: Path is not a file: {path}"
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-            # Cap extremely large files
+            content = file_path.read_text(encoding="utf-8", errors="replace")
             if len(content) > 100_000:
                 content = content[:100_000] + "\n\n[...truncated: file exceeds 100KB]"
             return content
-        except Exception as e:
-            return f"Error reading file: {e}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Error reading file: {exc}"

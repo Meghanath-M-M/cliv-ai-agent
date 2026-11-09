@@ -1,116 +1,245 @@
-import os
+"""Local RAG search with cached, incremental embeddings.
+
+The first search embeds each chunk with Ollama.  Embeddings are cached on
+disk keyed by the chunk's SHA-256, so later sessions only embed new or
+changed chunks.  Similarity is a single vectorized NumPy operation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
 import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 try:
     import numpy as np
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
     np = None  # type: ignore[assignment]
-import ollama
-from rich.console import Console
-from typing import Any
-from .base import BaseTool
 
-console = Console()
+from cliv.config import CONFIG_DIR
+from cliv.security import is_sensitive_path, project_root, resolve_project_path
+from cliv.tools.base import BaseTool
+
+IGNORED_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache"}
+INDEXED_SUFFIXES = {".py", ".md", ".txt", ".json"}
+MAX_FILE_BYTES = 1_000_000
+CHUNK_SIZE = 1000
+CACHE_VERSION = 1
 
 
 class SearchCodebaseTool(BaseTool):
-    def __init__(self):
-        self.name = "search_codebase"
-        self.description = "Search the entire project directory for code snippets relevant to a semantic query (RAG)."
-        self.input_schema = {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query, e.g., 'where is the database connection?'",
-                }
-            },
-            "required": ["query"],
-        }
+    name = "search_codebase"
+    description = (
+        "Search the project for code snippets relevant to a semantic query "
+        "using local Ollama embeddings (RAG)."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query, e.g., 'where is the database connection?'",
+            }
+        },
+        "required": ["query"],
+    }
+
+    def __init__(
+        self,
+        cache_path: Optional[Path] = None,
+        root: Optional[Path] = None,
+        model: str = "nomic-embed-text",
+    ):
+        self.cache_path = Path(cache_path) if cache_path else CONFIG_DIR / "embeddings.json"
+        self.root = Path(root).resolve() if root else None
+        self.model = model
+        self.collection: List[Dict[str, Any]] = []
+        self.is_indexed = False
+
+    def invalidate(self) -> None:
         self.collection = []
         self.is_indexed = False
 
-    def _build_index(self):
-        """Chunks the codebase and generates vector embeddings."""
-        if not np:
-            return "Error: numpy is required. Run `uv add numpy`."
+    def _get_ollama(self):
+        try:
+            import ollama
+        except ImportError:
+            return None
+        return ollama
 
-        console.print(
-            "\n[bold yellow][SYSTEM][/bold yellow] Indexing codebase for semantic search... (This takes a moment the first time)"
-        )
-        ignore_dirs = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache"}
+    def _embed(self, text: str) -> List[float]:
+        ollama = self._get_ollama()
+        if ollama is None:
+            raise RuntimeError(
+                "ollama is required for embeddings. Run `uv sync --extra offline`."
+            )
+        response = ollama.embeddings(model=self.model, prompt=text)
+        embedding = response["embedding"] if isinstance(response, dict) else response.embedding
+        return list(embedding)
 
-        for root, dirs, files in os.walk("."):
-            # Modify dirs in-place to skip ignored directories
-            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+    def _cache_key(self, relative_path: str, chunk: str) -> str:
+        digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+        return f"{relative_path}::{digest}"
 
-            for file in files:
-                if file.endswith((".py", ".md", ".txt", ".json")):
-                    filepath = os.path.join(root, file)
+    def _load_cache(self, root: Path) -> Dict[str, Any]:
+        if not self.cache_path.exists():
+            return {}
+        try:
+            with open(self.cache_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if payload.get("version") != CACHE_VERSION:
+                return {}
+            if payload.get("root") != str(root):
+                return {}
+            entries = payload.get("entries")
+            return entries if isinstance(entries, dict) else {}
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Could not read embedding cache: %s", exc)
+            return {}
+
+    def _save_cache(self, root: Path, entries: Dict[str, Any]) -> None:
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": CACHE_VERSION,
+                "root": str(root),
+                "entries": entries,
+            }
+            temp_path = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            os.replace(temp_path, self.cache_path)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Could not save embedding cache: %s", exc)
+
+    def _iter_files(self, root: Path):
+        try:
+            cache_path = self.cache_path.resolve()
+        except OSError:
+            cache_path = self.cache_path
+        for current_root, dirs, files in os.walk(root):
+            dirs[:] = [
+                directory
+                for directory in dirs
+                if directory not in IGNORED_DIRS
+                and not is_sensitive_path(Path(current_root) / directory)
+            ]
+            for filename in files:
+                path = Path(current_root) / filename
+                if path.suffix.lower() not in INDEXED_SUFFIXES:
+                    continue
+                if is_sensitive_path(path):
+                    continue
+                # Follow symlinks only when they stay inside the project.
+                _, path_error = resolve_project_path(str(path), root=root)
+                if path_error:
+                    continue
+                # Never index the cache file itself when a caller put it in
+                # the project directory (tests do this deliberately).
+                try:
+                    if path.resolve() == cache_path:
+                        continue
+                except OSError:
+                    pass
+                yield path
+
+    def _build_index(self) -> Optional[str]:
+        if np is None:
+            return "Error: numpy is required for semantic search. Run `uv sync --extra offline`."
+        if self._get_ollama() is None:
+            return "Error: ollama is required for semantic search. Run `uv sync --extra offline`."
+
+        root = (self.root or project_root()).resolve()
+        cache = self._load_cache(root)
+        fresh_cache: Dict[str, Any] = {}
+        collection: List[Dict[str, Any]] = []
+        embedding_failed = False
+
+        for path in self._iter_files(root):
+            try:
+                if path.stat().st_size > MAX_FILE_BYTES:
+                    continue
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Failed to read %s: %s", path, exc)
+                continue
+
+            relative_path = os.path.relpath(path, root)
+            chunks = [
+                content[start : start + CHUNK_SIZE]
+                for start in range(0, len(content), CHUNK_SIZE)
+            ]
+            for chunk in chunks:
+                key = self._cache_key(relative_path, chunk)
+                cached = cache.get(key)
+                if isinstance(cached, dict) and isinstance(cached.get("embedding"), list):
+                    embedding = cached["embedding"]
+                else:
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            content = f.read()
+                        embedding = self._embed(chunk)
+                    except Exception as exc:  # noqa: BLE001
+                        logging.warning("Failed to embed %s: %s", relative_path, exc)
+                        embedding_failed = True
+                        continue
+                fresh_cache[key] = {"embedding": embedding}
+                collection.append(
+                    {
+                        "filepath": relative_path,
+                        "content": chunk,
+                        "embedding": embedding,
+                    }
+                )
 
-                        # Simple chunking: split into ~1000 character blocks
-                        chunks = [
-                            content[i : i + 1000] for i in range(0, len(content), 1000)
-                        ]
+        if not collection and embedding_failed:
+            return (
+                "Error: Ollama embeddings failed. Make sure Ollama is running "
+                "and `nomic-embed-text` is pulled."
+            )
 
-                        for chunk in chunks:
-                            # Convert text into a mathematical vector
-                            response = ollama.embeddings(
-                                model="nomic-embed-text", prompt=chunk
-                            )
-                            embedding = response["embedding"]
-                            self.collection.append(
-                                {
-                                    "filepath": filepath,
-                                    "content": chunk,
-                                    "embedding": embedding,
-                                }
-                            )
-                    except Exception as e:
-                        logging.warning(f"Failed to index {filepath}: {e}")
-
+        self.collection = collection
         self.is_indexed = True
-        console.print("[bold green][SYSTEM] Codebase index complete![/bold green]")
+        self._save_cache(root, fresh_cache)
+        return None
 
     def execute(self, query: str, *args: Any, **kwargs: Any) -> str:
-        if not np:
+        if np is None:
             return "Error: numpy is required for vector math."
 
-        # Build the vector database on the first search
         if not self.is_indexed:
-            self._build_index()
+            error = self._build_index()
+            if error:
+                return error
 
         if not self.collection:
             return "No code files found to index."
 
-        # Embed the user's search query
-        query_res = ollama.embeddings(model="nomic-embed-text", prompt=query)
-        query_vec = np.array(query_res["embedding"])
-
-        # Calculate cosine similarity between the query and all code chunks
-        results = []
-        for item in self.collection:
-            doc_vec = np.array(item["embedding"])
-            # Cosine similarity formula: (A dot B) / (||A|| * ||B||)
-            similarity = np.dot(query_vec, doc_vec) / (
-                np.linalg.norm(query_vec) * np.linalg.norm(doc_vec)
+        try:
+            query_vec = np.asarray(self._embed(query), dtype=float)
+            matrix = np.asarray(
+                [item["embedding"] for item in self.collection], dtype=float
             )
-            results.append((similarity, item))
+        except Exception as exc:  # noqa: BLE001
+            return f"Error generating query embedding: {exc}"
 
-        # Sort by highest similarity
-        results.sort(key=lambda x: x[0], reverse=True)
+        if matrix.ndim != 2 or query_vec.ndim != 1:
+            return "Error: embedding cache contains malformed vectors."
 
-        # Return the top 3 most relevant code chunks
-        top_results = results[:3]
+        norms = np.linalg.norm(matrix, axis=1)
+        query_norm = np.linalg.norm(query_vec)
+        denominator = norms * query_norm
+        denominator[denominator == 0] = 1e-12
+        scores = (matrix @ query_vec) / denominator
 
+        top_indices = np.argsort(scores)[::-1][:3]
         output = f"Top 3 codebase matches for '{query}':\n\n"
-        for score, item in top_results:
+        for index in top_indices:
+            item = self.collection[int(index)]
             output += (
-                f"--- File: {item['filepath']} (Relevance Score: {score:.2f}) ---\n"
+                f"--- File: {item['filepath']} "
+                f"(Relevance Score: {scores[int(index)]:.2f}) ---\n"
+                f"{item['content']}\n\n"
             )
-            output += f"{item['content']}\n\n"
-
         return output

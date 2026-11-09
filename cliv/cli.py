@@ -9,6 +9,7 @@ import socket
 from getpass import getpass
 from cliv.agent import AIAgent
 from cliv.config import get_api_key, save_api_key
+from cliv.ui import ConsoleUI
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -78,6 +79,11 @@ def main():
         action="store_true",
         help="Preview tool operations without applying changes",
     )
+    parser.add_argument(
+        "--legacy-offline",
+        action="store_true",
+        help="Use regex intent routing instead of Ollama tool calling",
+    )
     args = parser.parse_args()
 
     # Validate conflicting flags
@@ -91,7 +97,7 @@ def main():
     if api_key == "" or args.offline:
         api_key = None
 
-    if not api_key and not args.prompt:
+    if not api_key and not args.prompt and not args.offline:
         console.print("[dim]No Groq API key found.[/dim]")
         console.print(
             "[dim]For Lightning Fast execution, get a free key: https://console.groq.com/keys[/dim]"
@@ -135,12 +141,16 @@ def main():
             api_key = None
 
     # Initialize the agent with flags
-    agent = AIAgent(
-        api_key=api_key,
-        verbose=args.verbose,
-        auto_approve=args.yes,
-        dry_run=args.dry_run,
-    )
+    with console.status("[dim]Configuring and validating model...[/dim]", spinner="dots"):
+        agent = AIAgent(
+            api_key=api_key,
+            verbose=args.verbose,
+            auto_approve=args.yes,
+            dry_run=args.dry_run,
+            force_offline=args.offline,
+            use_offline_tools=not args.legacy_offline,
+            ui=ConsoleUI(console),
+        )
 
     # Print mode banner
     mode_color = "green" if agent.mode == "online" else "yellow"
@@ -156,10 +166,18 @@ def main():
     console.print(logo)
 
     console.print(f"Mode: [bold {mode_color}]{agent.mode.upper()}[/bold {mode_color}]")
+    backend = getattr(agent, "backend", None)
+    model_name = getattr(backend, "model", None)
+    if model_name:
+        console.print(f"Model: [bold]{model_name}[/bold]")
+    for notice in getattr(agent, "model_notices", []):
+        console.print(f"[bold yellow]Model notice:[/bold yellow] {notice}")
     if args.yes:
         console.print("[dim]Auto-approve: ENABLED (use with caution)[/dim]")
     if args.dry_run:
         console.print("[dim]Dry-run: ENABLED (no changes will be applied)[/dim]")
+    if args.legacy_offline:
+        console.print("[dim]Offline routing: legacy regex fallback[/dim]")
     console.print("Terminal-native intelligence for your local codebase.")
     console.print("Type 'exit', 'quit', or 'clear' to manage the session.\n")
 
