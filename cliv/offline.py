@@ -32,6 +32,15 @@ class OfflineAssistant:
         if intent == "conversation":
             return self._generate(user_input, history=history)
 
+        if intent == "project_analysis":
+            with self.agent.ui.status(
+                "[dim]Building Project DNA...", spinner="dots"
+            ):
+                report = self.agent._execute_tool(
+                    "analyse_project", {"path": "."}
+                )
+            return report
+
         if intent == "list_dir":
             with self.agent.ui.status("[dim]Listing files...", spinner="dots"):
                 listing = self.agent._execute_tool("list_files", {"path": "."})

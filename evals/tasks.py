@@ -159,6 +159,38 @@ def _check_package(root: Path, response: str):
     return True, "package created"
 
 
+def _setup_project_dna(root: Path) -> None:
+    _write(
+        root,
+        "app.py",
+        "from utils.helpers import format_name\n\n"
+        "class App:\n"
+        "    pass\n\n"
+        "def main():\n"
+        "    return format_name('cliv')\n\n"
+        "if __name__ == \"__main__\":\n"
+        "    main()\n",
+    )
+    _write(root, "utils/__init__.py", "")
+    _write(
+        root,
+        "utils/helpers.py",
+        "def format_name(name):\n    return name.strip().title()\n",
+    )
+    _write(root, "requirements.txt", "rich>=13.0\n")
+
+
+def _check_project_dna(root: Path, response: str):
+    lowered = response.lower()
+    if "app.py" not in response:
+        return False, "response did not identify app.py"
+    if "architecture" not in lowered and "component" not in lowered:
+        return False, "response did not describe the project architecture"
+    if "dependency" not in lowered and "import" not in lowered:
+        return False, "response did not describe dependencies"
+    return True, "project architecture and dependencies were reported"
+
+
 def _setup_pytest(root: Path) -> None:
     _write(root, "test_ok.py", "def test_ok():\n    assert True\n")
 
@@ -228,6 +260,12 @@ TASKS: List[EvalTask] = [
         "Read notes.txt and tell me the launch code.",
         _setup_notes,
         _check_notes,
+    ),
+    EvalTask(
+        "project_dna",
+        "Analyse this project architecture and dependencies.",
+        _setup_project_dna,
+        _check_project_dna,
     ),
     EvalTask(
         "list_files",

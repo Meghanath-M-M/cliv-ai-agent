@@ -84,6 +84,11 @@ def main():
         action="store_true",
         help="Use regex intent routing instead of Ollama tool calling",
     )
+    parser.add_argument(
+        "--project-dna",
+        action="store_true",
+        help="Print a Project DNA report for the current directory and exit",
+    )
     args = parser.parse_args()
 
     # Validate conflicting flags
@@ -92,6 +97,18 @@ def main():
             "[bold red]Error: --yes and --dry-run are mutually exclusive.[/bold red]"
         )
         sys.exit(1)
+
+    if args.project_dna:
+        from cliv.intelligence import analyse_project
+        from cliv.security import project_root
+
+        try:
+            report = analyse_project(project_root())
+        except Exception as exc:  # noqa: BLE001 - keep CLI failures readable
+            console.print(f"[bold red]Project DNA failed:[/bold red] {exc}")
+            sys.exit(1)
+        console.print(report, markup=False)
+        return
 
     api_key = args.api_key or get_api_key()
     if api_key == "" or args.offline:

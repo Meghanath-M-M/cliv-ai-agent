@@ -24,6 +24,8 @@ A terminal-based AI coding assistant that reads, edits, and debugs files in your
 
 - 🔎 **Semantic Codebase Search (RAG)** — Chunks the project, embeds chunks with Ollama's `nomic-embed-text`, and ranks results with a vectorized cosine-similarity calculation. Embeddings are cached by chunk hash, so only new or changed chunks are re-embedded.
 
+- 🧬 **Project DNA** — Scans the repository, detects languages, extracts Python/JS/TS classes, functions, and imports, resolves internal dependencies, and builds an architecture report with components, entry points, cycles, duplicate functions, and unused dependencies. Run `cliv --project-dna`, or simply ask `Analyse this project.` It is read-only and also works through the offline intent router.
+
 - 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a unified diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
 
 - 🔒 **Project-Root Confinement** — Every file tool resolves paths against the project root and uses `Path.relative_to()` instead of string prefixes. Symlinks cannot escape the root. `.env`, private keys, `.ssh`, and similar secrets are blocked, and `.git` is write-protected.
@@ -103,6 +105,23 @@ cliv "list the files in this directory"
 cliv "create a hello.py that prints 'Hello, World!'"
 ```
 
+### Project DNA
+
+Analyse the current repository without an API key:
+
+```bash
+cliv --project-dna
+```
+
+Or use the same pipeline through the agent, online or offline:
+
+```bash
+cliv "Analyse this project."
+cliv --offline "Understand this codebase."
+```
+
+The report includes detected languages, architecture roles, components, entry points, declared and imported dependencies, internal dependency edges, cycles, and structural issues. Python is parsed with `ast`; JavaScript and TypeScript use a conservative import/symbol extractor. The tool is read-only and confined to the project root.
+
 ### Offline mode
 
 ```bash
@@ -148,6 +167,7 @@ cliv/
 ├── sanitizer.py    ← defensive parsing shield
 ├── security.py     ← project-root and sensitive-file policy
 ├── ui.py           ← UI boundary (Rich implementation + NullUI for tests)
+├── intelligence/   ← Project DNA: scanner, parser, dependency graph, report
 ├── llm/            ← provider backends, model validation, fallback router
 └── tools/          ← dynamically loaded tool plugins
 ```
@@ -208,6 +228,7 @@ The shield strips markdown fences, parses the JSON, and recovers **read-only** c
 |---|---|---|
 | `read_file` | Read a file inside the project (sensitive files blocked) | No |
 | `list_files` | List directory contents (sensitive entries hidden) | No |
+| `analyse_project` | Read-only Project DNA scan, symbol extraction, and dependency report | No |
 | `search_codebase` | Cached semantic search with local Ollama embeddings | No |
 | `run_tests` | Run pytest in the project root | **Yes** |
 | `run_command` | Run an allowlisted executable without a shell | **Yes** |
@@ -300,7 +321,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
+The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
 
 Run with coverage:
 
@@ -312,7 +333,7 @@ uv run pytest --cov=cliv --cov-report=term-missing
 
 ## 📊 Evaluation Set
 
-`evals/` contains 13 fixed tasks with machine-checkable pass/fail criteria: create a file, fix syntax, fix a logic bug, read a value, list files, delete, rename, multi-file edit, create a package, run tests, semantic search, refuse a secret, and inspect a git diff.
+`evals/` contains 14 fixed tasks with machine-checkable pass/fail criteria: create a file, fix syntax, fix a logic bug, read a value, analyse a project architecture, list files, delete, rename, multi-file edit, create a package, run tests, semantic search, refuse a secret, and inspect a git diff.
 
 ```bash
 python -m evals.run --list
@@ -333,6 +354,7 @@ Each task runs in a fresh temporary project. The runner prints per-task PASS/FAI
 - [x] Approval-gated test runs and allowlisted command execution
 - [x] Cached/incremental embeddings and vectorized similarity
 - [x] Groq model validation, ordered fallbacks, and tool-schema probing
+- [x] Project DNA: repository scanner, symbol parser, dependency graph, and architecture report
 - [x] Context-window budget instead of a fixed message count
 - [x] Multi-file edits with a combined diff before approval
 - [x] Reproducible evaluation set with pass/fail scoring

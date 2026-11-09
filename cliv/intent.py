@@ -17,8 +17,8 @@ FILE_EXTENSIONS = r"(?:py|js|ts|html|css|md|txt|json|yaml|yml|sh|rs|go|java|cpp|
 def classify_intent(user_input: str) -> Tuple[str, Optional[str]]:
     """Return ``(category, target)`` for a natural-language request.
 
-    Categories: conversation, file_create, file_read, file_fix,
-    file_remove, file_rename, list_dir, unknown.
+    Categories: conversation, project_analysis, file_create, file_read,
+    file_fix, file_remove, file_rename, list_dir, unknown.
     """
 
     lowered = user_input.lower().strip()
@@ -48,6 +48,17 @@ def classify_intent(user_input: str) -> Tuple[str, Optional[str]]:
         for pattern in conversation_patterns:
             if re.search(pattern, lowered):
                 return ("conversation", None)
+
+    project_analysis_patterns = [
+        r"\b(?:analys|analyz)e\s+(?:this|the|my|our)\s+(?:project|repo|repository|codebase)\b",
+        r"\b(?:project|repo|repository|codebase)[\s-]+(?:analysis|overview|dna|architecture|map|status)\b",
+        r"\b(?:understand|explain|inspect|map)\s+(?:this|the|my|our)\s+(?:project|repo|repository|codebase)\b",
+        r"\bwhat\s+(?:is|'s)\s+(?:this|the)\s+(?:project|repo|repository|codebase)\s+(?:about|architecture|structure)\b",
+        r"\b(?:architecture|dependency)\s+(?:of|for)\s+(?:this|the|my|our)\s+(?:project|repo|repository|codebase)\b",
+        r"\b(?:show|display|print)\s+(?:the\s+)?(?:dependency|import)\s+graph\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in project_analysis_patterns):
+        return ("project_analysis", None)
 
     if (
         re.search(

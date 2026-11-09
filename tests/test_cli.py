@@ -51,6 +51,28 @@ def test_process_prompt_calls_agent_chat():
     cli.process_prompt(agent, "hello")
 
 
+def test_main_project_dna_prints_report_without_starting_agent(
+    monkeypatch, project_dir, capsys
+):
+    (project_dir / "app.py").write_text(
+        "def main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n"
+    )
+    created = _install_fake_agent(monkeypatch)
+    monkeypatch.setattr(cli.sys, "argv", ["cliv", "--project-dna"])
+    monkeypatch.setattr(
+        cli,
+        "getpass",
+        lambda *args, **kwargs: pytest.fail("Project DNA must not prompt for a key"),
+    )
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert created == []
+    assert "CLIV PROJECT INTELLIGENCE" in output
+    assert "app.py" in output
+
+
 def test_main_offline_single_shot_skips_key_prompt(monkeypatch):
     created = _install_fake_agent(monkeypatch)
     monkeypatch.setattr(cli.sys, "argv", ["cliv", "--offline", "hello"])

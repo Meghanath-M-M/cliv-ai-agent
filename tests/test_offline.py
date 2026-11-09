@@ -82,3 +82,32 @@ def test_offline_unknown_uses_generation(project_dir):
     agent = make_offline_agent(project_dir, ["Paris is the capital of France."])
     result = agent.chat("what is the capital of France?")
     assert result == "Paris is the capital of France."
+
+
+def test_offline_project_analysis_returns_project_dna_without_generation(project_dir):
+    (project_dir / "app.py").write_text(
+        "def main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n"
+    )
+    (project_dir / "utils").mkdir()
+    (project_dir / "utils" / "helpers.py").write_text(
+        "def helper():\n    return 1\n"
+    )
+    agent = make_offline_agent(project_dir, [])
+
+    result = agent.chat("Analyse this project.")
+
+    assert "CLIV PROJECT INTELLIGENCE" in result
+    assert "app.py" in result
+    assert "utils/helpers.py" in result
+    assert agent.backend.prompts == []
+
+
+def test_project_analysis_works_without_any_llm_backend(project_dir):
+    (project_dir / "app.py").write_text("VALUE = 1\n")
+    agent = make_offline_agent(project_dir, [])
+    agent.backend = None
+
+    result = agent.chat("Analyse this project.")
+
+    assert "CLIV PROJECT INTELLIGENCE" in result
+    assert "app.py" in result

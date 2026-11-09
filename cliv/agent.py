@@ -367,6 +367,7 @@ class AIAgent:
                 "8. After using a tool, always summarize the result in your own clear, conversational words — never paste a tool's raw output directly back to the user.\n"
                 "9. All file tools are confined to the project directory. Do not try to read `.env`, private keys, or files outside the project; those accesses are blocked.\n"
                 "10. Use `run_tests` or `run_command` only when the user asks you to run code. Both require explicit approval.\n"
+                "11. PROJECT INTELLIGENCE PROTOCOL: If asked to analyse, understand, map, or explain a repository, project, codebase, architecture, components, or dependencies, call `analyse_project` first. Base your answer on its report; do not guess.\n"
                 f"\nAvailable tools:\n{tool_list}"
             ),
         }
@@ -511,7 +512,10 @@ class AIAgent:
     def _finish_offline(self, user_input: str) -> str:
         # Intent routing still needs a model for generated content.  Without
         # one, a create request would otherwise write the error text to disk.
-        if self.backend is None:
+        # Project DNA is the exception: it is deterministic and read-only, so
+        # it still works when no LLM backend is available at all.
+        intent, _ = classify_intent(user_input)
+        if self.backend is None and intent != "project_analysis":
             return (
                 "Error: No LLM backend is available. "
                 "Install `cliv[online]` or `cliv[offline]`."

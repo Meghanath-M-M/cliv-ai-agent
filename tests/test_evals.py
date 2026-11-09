@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from cliv.intelligence import analyse_project
 from evals.run import run_task
 from evals.tasks import EvalTask, available_tasks, dependencies_available
 
@@ -27,6 +28,14 @@ def test_eval_dependencies_are_described():
         available, reason = dependencies_available(task)
         assert isinstance(available, bool)
         assert isinstance(reason, str)
+
+
+def test_project_dna_eval_task_matches_the_real_report(tmp_path):
+    task = next(task for task in available_tasks() if task.name == "project_dna")
+    task.setup(tmp_path)
+    report = analyse_project(tmp_path)
+    ok, detail = task.check(tmp_path, report)
+    assert ok is True, detail
 
 
 def test_run_task_executes_setup_and_check(tmp_path):
