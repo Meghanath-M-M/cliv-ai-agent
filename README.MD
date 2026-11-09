@@ -19,6 +19,8 @@ A powerful, terminal-based AI coding assistant that autonomously reads, edits, a
 
 - 🛠️ **Autonomous File Operations** — Reads codebases, lists directory contents, and writes/edits files from natural language commands. No copy-pasting code back and forth.
 
+- 🔎 **Semantic Codebase Search (RAG)** — Finds relevant code and documentation with Ollama embeddings and cosine similarity, then returns matching snippets to the agent as context.
+
 - 🛡️ **Human-in-the-Loop Safety** — Before any file write or edit, the agent pauses and explicitly asks for permission. Your filesystem is never modified without your approval.
 
 - 🧠 **Defensive Parsing Shield** — Smaller local models sometimes hallucinate raw JSON text instead of proper function calls. The shield intercepts, normalizes, and executes these silently in the background — so offline mode stays reliable even when the model misbehaves.
@@ -44,8 +46,11 @@ cd cliv-ai-agent
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
-# 3. (Optional) Pull the offline model
+# 3. (Optional) Install offline/RAG dependencies and models
+uv sync --extra offline
+uv pip install numpy
 ollama pull llama3.1:8b                
+ollama pull nomic-embed-text
 
 # 4. Run
 cliv
@@ -53,7 +58,7 @@ cliv
 
 > Alternatively, install with pip: `pip install -e .`
 
-**Prerequisites:** Python 3.11+, [`uv`](https://astral.sh/uv) (recommended) or `pip`. For online mode, a free [Groq API key](https://console.groq.com/keys). For offline mode, [Ollama](https://ollama.com/) installed and running.
+**Prerequisites:** Python 3.11+, [`uv`](https://astral.sh/uv) (recommended) or `pip`. For online mode, a free [Groq API key](https://console.groq.com/keys). For offline mode and semantic code search, install [Ollama](https://ollama.com/) and pull the models shown above. Semantic search also requires NumPy.
 
 ---
 
@@ -113,7 +118,7 @@ cliv/
 ├── cli.py        ← Terminal UI (Rich), startup flow, routing, streaming output
 ├── agent.py      ← Core brain: tool routing, LLM calls, memory, parsing shield
 ├── config.py     ← API key management (env var → config file fallback)
-└── tools/        ← Dynamically-loaded tool plugins (read_file, list_files, edit_file)
+└── tools/        ← Dynamically-loaded tool plugins (file operations, tests, git, semantic search)
 ```
 
 ### How the Agent Loop Works
@@ -150,7 +155,13 @@ Small local models (3B parameters) often hallucinate tool calls as plain text JS
 |---|---|---|
 | `read_file` | Read any file's contents | No |
 | `list_files` | List directory contents | No |
+| `search_codebase` | Find relevant code/documentation snippets using local Ollama embeddings | No |
+| `run_tests` | Run pytest and return results | No |
+| `git_diff` | Show repository status and uncommitted changes | No |
 | `edit_file` | Write or patch a file on disk | **Yes — always** |
+| `remove_file` | Remove a file from disk | **Yes — always** |
+
+`search_codebase` indexes `.py`, `.md`, `.txt`, and `.json` files under the current directory on its first search, splits them into roughly 1,000-character chunks, and returns the three most similar matches. The index is held in memory for the current process; it uses Ollama's `nomic-embed-text` model and NumPy, including when the chat model is running online.
 
 Tools are dynamically loaded — any class inheriting from `BaseTool` and dropped into `cliv/tools/` is automatically discovered and registered at startup. Adding a new capability is a one-file change.
 
@@ -182,9 +193,6 @@ History and logs live alongside the config: `~/.config/cliv/history.json` and `~
 
 ## 🗺️ Roadmap
 
-- [ ] `run_tests` — execute `pytest` and feed results back to the agent for self-correcting debug loops
-- [ ] `git_diff` — read uncommitted changes and ask the agent to review or explain them
-- [ ] `search_codebase` — local semantic search using vector embeddings (Ollama `nomic-embed-text` + numpy cosine similarity)
 - [ ] `pyproject.toml` script entry for global `cliv` install via `pip install cliv-cli`
 - [ ] GitHub Actions CI with pytest coverage badge
 
