@@ -221,8 +221,11 @@ class OfflineAssistant:
                 )
             old_name, new_name = target.split("|", 1)
             old_name = self.agent._resolve_file(old_name) or old_name
+            # The rename flow copies the file internally and never sends
+            # its contents to a model.  Keep the original bytes so secrets
+            # are not replaced by redaction markers in the new file.
             file_content = self.agent._execute_tool(
-                "read_file", {"path": old_name}
+                "read_file", {"path": old_name}, redact=False
             )
             if file_content.startswith("Error:"):
                 listing = self.agent._execute_tool("list_files", {"path": "."})

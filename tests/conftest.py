@@ -18,6 +18,7 @@ def isolate_timeline_db(tmp_path, monkeypatch):
 
     monkeypatch.setenv("CLIV_TIMELINE_DB", str(tmp_path / "timeline.db"))
     monkeypatch.setenv("CLIV_SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+    monkeypatch.delenv("CLIV_PERMISSIONS", raising=False)
 
 
 @pytest.fixture

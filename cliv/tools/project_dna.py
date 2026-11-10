@@ -17,6 +17,8 @@ class ProjectDNATool(BaseTool):
         "Use this to understand an unfamiliar codebase before changing it. "
         "Read-only and safe to run without approval."
     )
+    permissions = frozenset({"read"})
+    risk_level = "low"
     input_schema: Dict[str, Any] = {
         "type": "object",
         "properties": {

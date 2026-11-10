@@ -7,6 +7,8 @@ from cliv.tools.base import BaseTool
 class ListFilesTool(BaseTool):
     name = "list_files"
     description = "List the contents of a directory inside the project"
+    permissions = frozenset({"read"})
+    risk_level = "low"
     input_schema = {
         "type": "object",
         "properties": {

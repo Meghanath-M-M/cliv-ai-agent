@@ -46,6 +46,8 @@ class RunCommandTool(BaseTool):
         "Use this for build/test commands, not for arbitrary shell pipelines."
     )
     requires_approval = True
+    permissions = frozenset({"execute"})
+    risk_level = "high"
     input_schema = {
         "type": "object",
         "properties": {

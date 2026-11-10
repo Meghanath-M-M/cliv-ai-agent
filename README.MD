@@ -28,13 +28,15 @@ A terminal-based AI coding assistant that reads, edits, and debugs files in your
 
 - 🩺 **Self-Healing Test Loop** — Ask `Fix all failing tests.` CLIV runs pytest, parses the failures, asks the selected model for a small JSON repair plan, applies it through the normal diff/approval gate, and reruns the suite for up to two repair attempts. It works online or with Ollama, never edits files directly, and reports every attempt.
 
-- 🕒 **Development Timeline** — An append-only local SQLite log of sessions, requests, approvals, tool results, test outcomes, self-heal runs, snapshots, and undo operations, scoped by project. Run `cliv --timeline` for a compact recent-history view, or let the agent call the read-only `read_timeline` tool. The log stores summaries rather than file contents and lives at `~/.config/cliv/timeline.db`.
+- 🕒 **Development Timeline** — An append-only local SQLite log of sessions, requests, approvals, tool results, test outcomes, self-heal runs, snapshots, undo operations, and Security Guardian decisions, scoped by project. Run `cliv --timeline` for a compact recent-history view, or let the agent call the read-only `read_timeline` tool. The log stores summaries rather than file contents, redacts recognized secrets, and lives at `~/.config/cliv/timeline.db`.
 
 - 🎨 **Risk-Aware Visual Diffs** — Every edit preview carries a LOW/MEDIUM/HIGH/CRITICAL risk assessment with concrete reasons. Wide terminals get a syntax-highlighted side-by-side diff; narrow terminals and logs keep a colored unified diff. Dependency files, CI workflows, security code, test removals, large deletions, and unsafe code additions are called out before approval.
 
 - ⏪ **Safety Snapshots & Time-Travel Undo** — CLIV captures the original bytes of every file immediately before an approved write or deletion. Run `cliv undo` to restore the most recent applied operation, or `cliv snapshots` to inspect the safety history. Undo refuses to overwrite later edits unless you explicitly force it.
 
-- 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a risk-aware diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
+- 🛡️ **Security Guardian** — A policy layer runs before every tool call and after every result. It supports `read`, `write`, `execute`, and `network` permission tiers; classifies commands such as destructive Git operations, package installs, and arbitrary Python; inherits the same operation-aware file risk shown in approval diffs; redacts recognized secrets before output reaches the model or timeline; warns the model when tool output contains instruction-like text; and writes append-only audit events. Permission denials happen before approval, so `--yes` cannot bypass them.
+
+- 🙋 **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a risk-aware diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
 
 - 🔒 **Project-Root Confinement** — Every file tool resolves paths against the project root and uses `Path.relative_to()` instead of string prefixes. Symlinks cannot escape the root. `.env`, private keys, `.ssh`, and similar secrets are blocked, and `.git` is write-protected.
 
@@ -173,6 +175,24 @@ cliv undo --yes             # skip the confirmation prompt
 
 Snapshots live outside the repository at `~/.config/cliv/snapshots/` (override with `CLIV_SNAPSHOT_DIR`). Undo verifies that each file still matches the state produced by the original operation. If another edit changed a file in the meantime, CLIV stops instead of clobbering it. Use `--force` only when you deliberately want to discard those later edits.
 
+### Security permissions
+
+By default CLIV grants all four capabilities: `read`, `write`, `execute`, and `network`. Restrict them per session when you want a narrower agent:
+
+```bash
+cliv --permissions read "Summarize this repository."
+cliv --permissions read,write "Update the docstrings in cli.py."
+cliv --permissions read,write,execute "Run the tests and fix failures."
+```
+
+Use `CLIV_PERMISSIONS` or the saved config key `permissions` for a persistent policy. Permission checks run **before** the approval prompt; `--yes` does not bypass them.
+
+The Guardian also applies command-specific checks. For example, `git push`, `git fetch`, and `python -m pip install` require `network`; `git reset --hard` is marked critical; and arbitrary Python or pytest execution is marked high risk. These command checks are deliberately heuristic. If you need a hard network boundary, run CLIV inside a container or OS-level sandbox.
+
+Tool output is treated as untrusted data. Recognized credentials are replaced with `[REDACTED]` before they are sent back to the model or written to the timeline. If a file or command result looks like it is trying to instruct the assistant, CLIV prepends a security notice and records a `prompt_injection` audit event. The content is preserved for inspection, but the model is told not to follow instructions embedded inside it.
+
+Allowed writes and executions, plus every permission denial, are available in the timeline as `security_decision` and `permission_denied` events. Redactions and injection warnings are recorded as `redaction` and `prompt_injection` events. Mutating tools are snapshot-backed: if a safety snapshot cannot be created, the write is blocked rather than applied without a rollback point.
+
 ### Offline mode
 
 ```bash
@@ -218,12 +238,13 @@ cliv/
 ├── sanitizer.py    ← defensive parsing shield
 ├── security.py     ← project-root and sensitive-file policy
 ├── risk.py         ← path-aware risk classification for changes
+├── guardian.py     ← permissions, command risk, redaction, injection defense
 ├── diff_view.py    ← risk-aware, syntax-highlighted approval rendering
 ├── snapshots.py    ← pre-write file snapshots, conflict checks, and undo
 ├── ui.py           ← UI boundary (Rich implementation + NullUI for tests)
 ├── intelligence/   ← Project DNA: scanner, parser, dependency graph, report
 ├── healing/        ← bounded pytest repair loop and structured failure parsing
-├── timeline/       ← append-only SQLite development event log
+├── timeline/       ← redacted, append-only SQLite development event log
 ├── llm/            ← provider backends, model validation, fallback router
 └── tools/          ← dynamically loaded tool plugins
 ```
@@ -242,7 +263,10 @@ Build system prompt + context within token budget
 Call backend with tool schemas
     ↓
 Tool calls returned?
-  ├── Yes → check approval → execute → append result → loop
+  ├── Yes → Guardian permission/risk check
+  │        ├── Denied → append block reason → loop
+  │        └── Allowed → check approval → snapshot → execute
+  │                      → redact/scan result → append result → loop
   └── No  → sanitize response
               ├── Recovered read-only tool call → execute → loop
               └── Plain text → return to user
@@ -280,19 +304,19 @@ The shield strips markdown fences, parses the JSON, and recovers **read-only** c
 
 ## 🛠️ Tool Reference
 
-| Tool | Description | Requires Approval |
-|---|---|---|
-| `read_file` | Read a file inside the project (sensitive files blocked) | No |
-| `list_files` | List directory contents (sensitive entries hidden) | No |
-| `analyse_project` | Read-only Project DNA scan, symbol extraction, and dependency report | No |
-| `read_timeline` | Read the recent append-only development timeline for this project | No |
-| `search_codebase` | Cached semantic search with local Ollama embeddings | No |
-| `run_tests` | Run pytest in the project root | **Yes** |
-| `run_command` | Run an allowlisted executable without a shell | **Yes** |
-| `git_diff` | Show repository status and uncommitted changes | No |
-| `edit_file` | Write or patch a file; shows a risk-aware diff and captures a snapshot | **Yes** |
-| `multi_edit` | Apply several edits; shows one combined risk-aware diff and captures all files | **Yes** |
-| `remove_file` | Delete a file; captures a snapshot and shows deletion risk | **Yes** |
+| Tool | Description | Permission | Requires Approval |
+|---|---|---|---|
+| `read_file` | Read a file inside the project (sensitive files blocked) | Read | No |
+| `list_files` | List directory contents (sensitive entries hidden) | Read | No |
+| `analyse_project` | Read-only Project DNA scan, symbol extraction, and dependency report | Read | No |
+| `read_timeline` | Read the recent append-only development timeline for this project | Read | No |
+| `search_codebase` | Cached semantic search with local Ollama embeddings | Read | No |
+| `run_tests` | Run pytest in the project root | Execute | **Yes** |
+| `run_command` | Run an allowlisted executable without a shell | Execute; Network for commands such as `git push` | **Yes** |
+| `git_diff` | Show repository status and uncommitted changes | Read | No |
+| `edit_file` | Write or patch a file; shows a risk-aware diff and captures a snapshot | Read + Write | **Yes** |
+| `multi_edit` | Apply several edits; shows one combined risk-aware diff and captures all files | Read + Write | **Yes** |
+| `remove_file` | Delete a file; captures a snapshot and shows deletion risk | Read + Write | **Yes** |
 
 `run_tests` and `run_command` require approval because pytest imports project code and allowlisted tools such as Python and Git can still have side effects. `run_command` rejects shell metacharacters by construction: it takes a bare executable name plus an argument list and calls `subprocess.run(..., shell=False)`.
 
@@ -306,6 +330,8 @@ class ReadFileTool(BaseTool):
     description = "Read the contents of a file at the specified path"
     input_schema = { ... }
     requires_approval = False
+    permissions = frozenset({"read"})
+    risk_level = "low"
 
     def execute(self, path: str, **kwargs) -> str:
         ...
@@ -313,7 +339,13 @@ class ReadFileTool(BaseTool):
     # Optional: return a diff/preview shown before approval.
     def preview(self, tool_input: dict) -> str | None:
         ...
+
+    # Optional: return operation-specific risk for the Guardian audit.
+    def assess_risk(self, tool_input: dict) -> RiskAssessment | None:
+        ...
 ```
+
+Declare `permissions` and `risk_level` on every tool. The base class is fail-closed: an undeclared tool requires all four permissions and is treated as high risk, so a plugin cannot silently bypass a restricted policy. `requires_approval` controls the human confirmation prompt; it is separate from Guardian permissions.
 
 ### Security model
 
@@ -328,6 +360,11 @@ class ReadFileTool(BaseTool):
 - Before an approved file write or deletion, the agent captures a safety snapshot of the affected files. Snapshots are stored outside the project with restrictive permissions and are scoped by project root.
 - Undo checks the post-operation file hashes first and refuses to overwrite files that changed after the snapshot unless `--force` is supplied.
 - Approval previews classify changes as LOW/MEDIUM/HIGH/CRITICAL and call out dependency files, CI configuration, security code, deleted tests, large deletions, and unsafe code patterns.
+- The Security Guardian enforces `read`, `write`, `execute`, and `network` permission tiers before approval. Restricted policies cannot be bypassed with `--yes` or by a prompt-injection attempt.
+- Commands are classified separately: network-capable Git operations require `network`, destructive repository rewrites are high/critical, and arbitrary Python/pytest execution is high risk. These are heuristics, not an OS sandbox.
+- Tool output is scanned for prompt-injection patterns and recognizable credentials. Injection warnings mark the content as untrusted; secrets are replaced with `[REDACTED]` before reaching the model or the timeline.
+- Security decisions, denials, redactions, and prompt-injection detections are recorded as append-only timeline events. The timeline applies the same redaction pass to summaries and details.
+- Mutating tools are snapshot-backed: a write is blocked if the pre-write snapshot cannot be created, so every applied mutation has a rollback point.
 
 ---
 
@@ -342,6 +379,8 @@ class ReadFileTool(BaseTool):
 | Force offline | `cliv --offline` | Overrides all of the above |
 
 History and logs live alongside the config: `~/.config/cliv/history.json` and `~/.config/cliv/agent.log`. The embedding cache is `~/.config/cliv/embeddings.json`. The development timeline is `~/.config/cliv/timeline.db`; set `CLIV_TIMELINE_DB` to use another path. Safety snapshots live under `~/.config/cliv/snapshots/`; set `CLIV_SNAPSHOT_DIR` to move them. Logs rotate at 5 MB with three backups.
+
+Security permissions can be set per invocation with `cliv --permissions read,write`, persistently with `CLIV_PERMISSIONS=read,write,execute`, or with the saved config key `permissions`. The default is all four tiers.
 
 ### Model selection and fallback
 
@@ -382,7 +421,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-The suite covers the agent loop, approval flow, path security, risk classification, diff rendering, safety snapshots and undo, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, the append-only development timeline, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
+The suite covers the agent loop, approval flow, path security, risk classification, diff rendering, safety snapshots and undo, Security Guardian permissions/command risk/redaction/prompt-injection handling, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, the append-only development timeline, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
 
 Run with coverage:
 
@@ -420,6 +459,7 @@ Each task runs in a fresh temporary project. The runner prints per-task PASS/FAI
 - [x] Development Intelligence Timeline: append-only SQLite event log, CLI view, and read-only agent tool
 - [x] Risk-aware visual diffs: syntax-highlighted side-by-side review with risk levels and concrete reasons
 - [x] Safety snapshots and time-travel undo: pre-write capture, conflict-aware rollback, and `cliv undo`
+- [x] Security Guardian: permission tiers, command/tool risk, secret redaction, prompt-injection defense, and audit events
 - [x] Context-window budget instead of a fixed message count
 - [x] Multi-file edits with a combined diff before approval
 - [x] Reproducible evaluation set with pass/fail scoring

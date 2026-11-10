@@ -166,3 +166,32 @@ def test_interactive_clear_then_exit(monkeypatch):
     cli.main()
 
     assert created[0].cleared is True
+
+
+def test_main_passes_security_permissions_to_agent(monkeypatch):
+    created = _install_fake_agent(monkeypatch)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["cliv", "--offline", "--permissions", "read,execute", "hello"],
+    )
+
+    cli.main()
+
+    guardian = created[0].kwargs["guardian"]
+    assert guardian.policy.permissions == {"read", "execute"}
+
+
+def test_main_rejects_unknown_permission(monkeypatch):
+    created = _install_fake_agent(monkeypatch)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["cliv", "--offline", "--permissions", "read,teleport", "hello"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert created == []

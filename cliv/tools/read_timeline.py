@@ -12,6 +12,8 @@ class ReadTimelineTool(BaseTool):
         "Read-only."
     )
     requires_approval = False
+    permissions = frozenset({"read"})
+    risk_level = "low"
     input_schema = {
         "type": "object",
         "properties": {

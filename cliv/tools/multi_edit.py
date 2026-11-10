@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from cliv.diffs import preview_changes
+from cliv.risk import RiskAssessment, assess_changes
 from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
@@ -18,6 +19,8 @@ class MultiEditTool(BaseTool):
         "of a full overwrite."
     )
     requires_approval = True
+    permissions = frozenset({"read", "write"})
+    risk_level = "medium"
     input_schema = {
         "type": "object",
         "properties": {
@@ -121,6 +124,19 @@ class MultiEditTool(BaseTool):
                 continue
             changes.append((path, original, current))
         return preview_changes(changes, notes=notes)
+
+    def assess_risk(self, tool_input: Dict[str, Any]) -> Optional[RiskAssessment]:
+        state, error = self._prepare(tool_input.get("edits"))
+        if error or state is None:
+            return None
+        changes = [
+            (path, original, current)
+            for path, (existed, original, current) in state.items()
+            if not existed or original != current
+        ]
+        if not changes:
+            return RiskAssessment("low", ("no file changes",))
+        return assess_changes(changes)
 
     def execute(self, edits: Any = None, **kwargs) -> str:
         state, error = self._prepare(edits)

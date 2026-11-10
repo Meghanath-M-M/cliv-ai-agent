@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cliv.config import TIMELINE_FILE
+from cliv.guardian import redact_data, redact_secrets
 from cliv.security import project_root
 
 MAX_SUMMARY_CHARS = 400
@@ -123,11 +124,13 @@ class TimelineStore:
             root = (project or project_root()).resolve()
         except (OSError, RuntimeError):
             root = Path.cwd().resolve()
-        summary = " ".join(str(summary).split())[:MAX_SUMMARY_CHARS]
+        summary = redact_secrets(" ".join(str(summary).split())).text[
+            :MAX_SUMMARY_CHARS
+        ]
         event_type = str(event_type).strip()[:64] or "event"
 
         raw_details = json.dumps(
-            details or {}, ensure_ascii=False, default=str
+            redact_data(details or {}), ensure_ascii=False, default=str
         )
         if len(raw_details) > MAX_DETAILS_CHARS:
             raw_details = json.dumps(

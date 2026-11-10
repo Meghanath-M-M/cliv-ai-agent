@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from cliv.risk import assess_delete
+from cliv.risk import RiskAssessment, assess_delete
 from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
@@ -12,6 +12,8 @@ class RemoveFileTool(BaseTool):
     name = "remove_file"
     description = "Delete/remove a file from disk. Requires approval."
     requires_approval = True
+    permissions = frozenset({"read", "write"})
+    risk_level = "high"
     input_schema = {
         "type": "object",
         "properties": {
@@ -41,6 +43,14 @@ class RemoveFileTool(BaseTool):
             return f"Error: File not found: {path}"
         risk = assess_delete(resolved)
         return f"{risk.render()}\nWill permanently delete: {resolved}"
+
+    def assess_risk(self, tool_input: Dict[str, Any]) -> Optional[RiskAssessment]:
+        resolved, error = resolve_project_path(
+            str(tool_input.get("path", "")), for_write=True
+        )
+        if error or resolved is None:
+            return None
+        return assess_delete(resolved)
 
     def execute(self, path: str, **kwargs) -> str:
         file_path, error = resolve_project_path(path, for_write=True)

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cliv.diffs import preview_edit
+from cliv.risk import RiskAssessment, assess_edit
 from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
@@ -16,6 +17,8 @@ class EditFileTool(BaseTool):
         "If 'old_string' is omitted, the entire file is overwritten with 'new_string'."
     )
     requires_approval = True
+    permissions = frozenset({"read", "write"})
+    risk_level = "medium"
     input_schema = {
         "type": "object",
         "properties": {
@@ -42,24 +45,31 @@ class EditFileTool(BaseTool):
         resolved, error = self._target(str(tool_input.get("path", "")))
         return [resolved] if resolved is not None and not error else []
 
-    def preview(self, tool_input: Dict[str, Any]) -> Optional[str]:
+    def _change(
+        self, tool_input: Dict[str, Any]
+    ) -> tuple[Optional[Path], str, str, Optional[str]]:
         path = str(tool_input.get("path", ""))
         new_string = str(tool_input.get("new_string", ""))
         old_string = str(tool_input.get("old_string", ""))
         resolved, error = self._target(path)
         if error:
-            return error
+            return None, "", "", error
 
         assert resolved is not None
         if old_string:
             if not resolved.exists():
-                return f"Error: File not found for patching: {path}"
+                return None, "", "", f"Error: File not found for patching: {path}"
             try:
                 content = resolved.read_text(encoding="utf-8")
             except Exception as exc:  # noqa: BLE001
-                return f"Error reading file: {exc}"
+                return None, "", "", f"Error reading file: {exc}"
             if old_string not in content:
-                return "Error: old_string not found in file. File unchanged."
+                return (
+                    None,
+                    "",
+                    "",
+                    "Error: old_string not found in file. File unchanged.",
+                )
             updated = content.replace(old_string, new_string, 1)
         else:
             if resolved.exists() and resolved.is_file():
@@ -70,8 +80,20 @@ class EditFileTool(BaseTool):
             else:
                 content = ""
             updated = new_string
+        return resolved, content, updated, None
 
+    def preview(self, tool_input: Dict[str, Any]) -> Optional[str]:
+        resolved, content, updated, error = self._change(tool_input)
+        if error:
+            return error
+        assert resolved is not None
         return preview_edit(resolved, content, updated)
+
+    def assess_risk(self, tool_input: Dict[str, Any]) -> Optional[RiskAssessment]:
+        resolved, content, updated, error = self._change(tool_input)
+        if error or resolved is None:
+            return None
+        return assess_edit(resolved, content, updated)
 
     def execute(
         self, path: str, new_string: str, old_string: str = "", **kwargs

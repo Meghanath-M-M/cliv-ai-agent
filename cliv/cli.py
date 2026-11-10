@@ -5,10 +5,12 @@ Handles startup flow, routing, real output, and session management.
 
 import sys
 import argparse
+import re
 import socket
 from getpass import getpass
 from cliv.agent import AIAgent
 from cliv.config import get_api_key, save_api_key
+from cliv.guardian import ALL_PERMISSIONS, SecurityGuardian, SecurityPolicy
 from cliv.ui import ConsoleUI
 
 from rich.console import Console
@@ -111,6 +113,14 @@ def main():
         action="store_true",
         help="Allow --undo to overwrite files changed after the snapshot",
     )
+    parser.add_argument(
+        "--permissions",
+        metavar="LIST",
+        help=(
+            "Comma-separated Security Guardian permissions to grant: "
+            "read,write,execute,network (default: all)"
+        ),
+    )
 
     # Friendly aliases: ``cliv undo`` and ``cliv snapshots``.
     argv = sys.argv[1:]
@@ -141,6 +151,25 @@ def main():
             "[bold red]Error: --force can only be used with --undo.[/bold red]"
         )
         sys.exit(1)
+
+    security_guardian = None
+    if args.permissions is not None:
+        requested = {
+            token.lower()
+            for token in re.split(r"[,\s]+", args.permissions)
+            if token
+        }
+        unknown = requested - ALL_PERMISSIONS
+        if unknown:
+            console.print(
+                "[bold red]Error: unknown permission(s): "
+                f"{', '.join(sorted(unknown))}. "
+                "Choose from read,write,execute,network.[/bold red]"
+            )
+            sys.exit(1)
+        security_guardian = SecurityGuardian(
+            SecurityPolicy.parse(args.permissions)
+        )
 
     if args.snapshots:
         from cliv.snapshots import SnapshotStore, render_snapshots
@@ -310,6 +339,7 @@ def main():
             ui=ConsoleUI(console),
             timeline_store=timeline_store,
             snapshot_store=snapshot_store,
+            guardian=security_guardian,
         )
 
     # Print mode banner
@@ -338,6 +368,11 @@ def main():
         console.print("[dim]Dry-run: ENABLED (no changes will be applied)[/dim]")
     if args.legacy_offline:
         console.print("[dim]Offline routing: legacy regex fallback[/dim]")
+    guardian = getattr(agent, "guardian", None)
+    if guardian is not None:
+        console.print(
+            f"[dim]Permissions: {guardian.policy.render()}[/dim]"
+        )
     console.print("Terminal-native intelligence for your local codebase.")
     console.print("Type 'exit', 'quit', or 'clear' to manage the session.\n")
 

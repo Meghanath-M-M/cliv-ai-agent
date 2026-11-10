@@ -32,6 +32,8 @@ CACHE_VERSION = 1
 
 class SearchCodebaseTool(BaseTool):
     name = "search_codebase"
+    permissions = frozenset({"read"})
+    risk_level = "low"
     description = (
         "Search the project for code snippets relevant to a semantic query "
         "using local Ollama embeddings (RAG)."

@@ -7,6 +7,8 @@ from cliv.tools.base import BaseTool
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = "Read the contents of a file inside the project directory"
+    permissions = frozenset({"read"})
+    risk_level = "low"
     input_schema = {
         "type": "object",
         "properties": {

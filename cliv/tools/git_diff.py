@@ -3,6 +3,9 @@ from .base import BaseTool
 
 
 class GitDiffTool(BaseTool):
+    permissions = frozenset({"read"})
+    risk_level = "low"
+
     def __init__(self):
         self.name = "git_diff"
         self.description = "Get the git status and git diff of the current repository to see what code has changed."

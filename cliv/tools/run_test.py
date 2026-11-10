@@ -17,6 +17,8 @@ class RunTestsTool(BaseTool):
         "Requires approval because pytest imports and executes project code."
     )
     requires_approval = True
+    permissions = frozenset({"execute"})
+    risk_level = "high"
     input_schema = {
         "type": "object",
         "properties": {
