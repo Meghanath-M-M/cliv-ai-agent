@@ -89,6 +89,11 @@ def main():
         action="store_true",
         help="Print a Project DNA report for the current directory and exit",
     )
+    parser.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Print the recent development timeline for the current directory and exit",
+    )
     args = parser.parse_args()
 
     # Validate conflicting flags
@@ -97,6 +102,18 @@ def main():
             "[bold red]Error: --yes and --dry-run are mutually exclusive.[/bold red]"
         )
         sys.exit(1)
+
+    if args.timeline:
+        from cliv.timeline import TimelineStore, render_timeline
+
+        try:
+            store = TimelineStore()
+            events = store.recent(limit=25)
+            console.print(render_timeline(events), markup=False)
+        except Exception as exc:  # noqa: BLE001 - keep CLI failures readable
+            console.print(f"[bold red]Timeline failed:[/bold red] {exc}")
+            sys.exit(1)
+        return
 
     if args.project_dna:
         from cliv.intelligence import analyse_project
@@ -158,6 +175,14 @@ def main():
             api_key = None
 
     # Initialize the agent with flags
+    timeline_store = None
+    try:
+        from cliv.timeline import TimelineStore
+
+        timeline_store = TimelineStore()
+    except Exception as exc:  # noqa: BLE001 - timeline is optional telemetry
+        console.print(f"[dim]Timeline disabled: {exc}[/dim]")
+
     with console.status("[dim]Configuring and validating model...[/dim]", spinner="dots"):
         agent = AIAgent(
             api_key=api_key,
@@ -167,6 +192,7 @@ def main():
             force_offline=args.offline,
             use_offline_tools=not args.legacy_offline,
             ui=ConsoleUI(console),
+            timeline_store=timeline_store,
         )
 
     # Print mode banner

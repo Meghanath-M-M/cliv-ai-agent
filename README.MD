@@ -28,6 +28,8 @@ A terminal-based AI coding assistant that reads, edits, and debugs files in your
 
 - 🩺 **Self-Healing Test Loop** — Ask `Fix all failing tests.` CLIV runs pytest, parses the failures, asks the selected model for a small JSON repair plan, applies it through the normal diff/approval gate, and reruns the suite for up to two repair attempts. It works online or with Ollama, never edits files directly, and reports every attempt.
 
+- 🕒 **Development Timeline** — An append-only local SQLite log of sessions, requests, approvals, tool results, test outcomes, and self-heal runs, scoped by project. Run `cliv --timeline` for a compact recent-history view, or let the agent call the read-only `read_timeline` tool. The log stores summaries rather than file contents and lives at `~/.config/cliv/timeline.db`.
+
 - 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a unified diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
 
 - 🔒 **Project-Root Confinement** — Every file tool resolves paths against the project root and uses `Path.relative_to()` instead of string prefixes. Symlinks cannot escape the root. `.env`, private keys, `.ssh`, and similar secrets are blocked, and `.git` is write-protected.
@@ -138,6 +140,16 @@ CLIV runs `pytest` first, extracts failing test names and relevant source files,
 
 The loop is intentionally narrow: it does not run arbitrary commands, does not bypass approvals, and does not hide failures. `--dry-run` reports that self-healing is skipped because it needs to execute tests and apply edits.
 
+### Development timeline
+
+Inspect what CLIV has done in this project:
+
+```bash
+cliv --timeline
+```
+
+The timeline is an append-only SQLite database at `~/.config/cliv/timeline.db` (override with `CLIV_TIMELINE_DB`). It records session starts, requests, approval decisions, write/test tool results, and self-heal summaries. Events are scoped by project root, so a repository only shows its own history. Database triggers reject updates and deletes. The agent can also query it through the read-only `read_timeline` tool, for example: `What have we done recently?`
+
 ### Offline mode
 
 ```bash
@@ -185,6 +197,7 @@ cliv/
 ├── ui.py           ← UI boundary (Rich implementation + NullUI for tests)
 ├── intelligence/   ← Project DNA: scanner, parser, dependency graph, report
 ├── healing/        ← bounded pytest repair loop and structured failure parsing
+├── timeline/       ← append-only SQLite development event log
 ├── llm/            ← provider backends, model validation, fallback router
 └── tools/          ← dynamically loaded tool plugins
 ```
@@ -246,6 +259,7 @@ The shield strips markdown fences, parses the JSON, and recovers **read-only** c
 | `read_file` | Read a file inside the project (sensitive files blocked) | No |
 | `list_files` | List directory contents (sensitive entries hidden) | No |
 | `analyse_project` | Read-only Project DNA scan, symbol extraction, and dependency report | No |
+| `read_timeline` | Read the recent append-only development timeline for this project | No |
 | `search_codebase` | Cached semantic search with local Ollama embeddings | No |
 | `run_tests` | Run pytest in the project root | **Yes** |
 | `run_command` | Run an allowlisted executable without a shell | **Yes** |
@@ -284,6 +298,7 @@ class ReadFileTool(BaseTool):
 - `read_file` and `list_files` no longer have unrestricted access to `$HOME`.
 - Commands use an explicit allowlist (`CLIV_ALLOWED_COMMANDS` can extend it) and run without a shell.
 - API keys are saved with `0600` permissions on POSIX.
+- The timeline database is created with `0600` permissions on POSIX and rejects updates/deletes through append-only triggers.
 
 ---
 
@@ -297,7 +312,7 @@ class ReadFileTool(BaseTool):
 | Interactive prompt | On first launch | Fallback |
 | Force offline | `cliv --offline` | Overrides all of the above |
 
-History and logs live alongside the config: `~/.config/cliv/history.json` and `~/.config/cliv/agent.log`. The embedding cache is `~/.config/cliv/embeddings.json`. Logs rotate at 5 MB with three backups.
+History and logs live alongside the config: `~/.config/cliv/history.json` and `~/.config/cliv/agent.log`. The embedding cache is `~/.config/cliv/embeddings.json`. The development timeline is `~/.config/cliv/timeline.db`; set `CLIV_TIMELINE_DB` to use another path. Logs rotate at 5 MB with three backups.
 
 ### Model selection and fallback
 
@@ -338,7 +353,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
+The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, the append-only development timeline, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
 
 Run with coverage:
 
@@ -373,6 +388,7 @@ Each task runs in a fresh temporary project. The runner prints per-task PASS/FAI
 - [x] Groq model validation, ordered fallbacks, and tool-schema probing
 - [x] Project DNA: repository scanner, symbol parser, dependency graph, and architecture report
 - [x] Self-healing test loop with structured pytest parsing, bounded JSON repairs, and approval-gated reruns
+- [x] Development Intelligence Timeline: append-only SQLite event log, CLI view, and read-only agent tool
 - [x] Context-window budget instead of a fixed message count
 - [x] Multi-file edits with a combined diff before approval
 - [x] Reproducible evaluation set with pass/fail scoring

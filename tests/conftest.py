@@ -12,6 +12,13 @@ def project_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def isolate_timeline_db(tmp_path, monkeypatch):
+    """Keep timeline telemetry out of the user's real config directory."""
+
+    monkeypatch.setenv("CLIV_TIMELINE_DB", str(tmp_path / "timeline.db"))
+
+
 @pytest.fixture
 def mock_groq_client():
     """Returns a mocked Groq client."""

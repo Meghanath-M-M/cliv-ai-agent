@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from cliv import cli
+from cliv.timeline import TimelineStore
 
 
 class _Stats:
@@ -71,6 +72,30 @@ def test_main_project_dna_prints_report_without_starting_agent(
     assert created == []
     assert "CLIV PROJECT INTELLIGENCE" in output
     assert "app.py" in output
+
+
+def test_main_timeline_prints_events_without_starting_agent(
+    monkeypatch, project_dir, capsys
+):
+    store = TimelineStore()
+    store.record(
+        "request", "timeline smoke test", {"intent": "project_analysis"},
+        project=project_dir,
+    )
+    created = _install_fake_agent(monkeypatch)
+    monkeypatch.setattr(cli.sys, "argv", ["cliv", "--timeline"])
+    monkeypatch.setattr(
+        cli,
+        "getpass",
+        lambda *args, **kwargs: pytest.fail("Timeline must not prompt for a key"),
+    )
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert created == []
+    assert "CLIV DEVELOPMENT TIMELINE" in output
+    assert "timeline smoke test" in output
 
 
 def test_main_offline_single_shot_skips_key_prompt(monkeypatch):

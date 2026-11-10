@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -28,10 +29,14 @@ from cliv.llm import (
 from cliv.models import AgentError, SessionStats, ToolCall
 from cliv.offline import OfflineAssistant
 from cliv.sanitizer import sanitize_response
+from cliv.security import project_root
 from cliv.text import strip_markdown_fences
 from cliv.tools.base import BaseTool
 from cliv.tools.loader import load_tools
 from cliv.ui import ConsoleUI, UI
+
+if TYPE_CHECKING:
+    from cliv.timeline import TimelineStore
 
 # Re-exported for backwards compatibility with older imports/tests.
 __all__ = [
@@ -106,6 +111,7 @@ class AIAgent:
         mode: Optional[str] = None,
         use_offline_tools: bool = True,
         internet_check=None,
+        timeline_store: Optional["TimelineStore"] = None,
     ):
         self.api_key = api_key
         self.local_model = local_model
@@ -126,6 +132,8 @@ class AIAgent:
         self.tools: Dict[str, BaseTool] = self._load_tools()
         self._write_tools = set(self.WRITE_TOOLS)
         self.model_notices: List[str] = []
+        self.timeline = timeline_store
+        self.session_id = uuid.uuid4().hex
 
         if backend is not None:
             self.backend: Optional[LLMBackend] = backend
@@ -144,6 +152,35 @@ class AIAgent:
             )
 
         self.offline = OfflineAssistant(self)
+
+        if self.timeline is not None:
+            self._timeline_event(
+                "session_start",
+                f"Session started in {project_root()}",
+                {
+                    "mode": self.mode,
+                    "model": getattr(self.backend, "model", None),
+                },
+            )
+
+    def _timeline_event(
+        self,
+        event_type: str,
+        summary: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if self.timeline is None:
+            return
+        try:
+            self.timeline.record(
+                event_type,
+                summary,
+                details,
+                project=project_root(),
+                session_id=self.session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - telemetry must never break work
+            logging.warning("Timeline write failed: %s", exc)
 
     @staticmethod
     def _check_internet(
@@ -204,6 +241,11 @@ class AIAgent:
     def _request_approval(self, tool_name: str, tool_input: Dict[str, Any]) -> bool:
         if self.auto_approve:
             self.ui.print(f"[dim]Auto-approved {tool_name} (--yes mode)[/dim]")
+            self._timeline_event(
+                "approval",
+                f"Auto-approved {tool_name}",
+                {"tool": tool_name, "decision": "auto"},
+            )
             return True
 
         tool = self.tools.get(tool_name)
@@ -218,9 +260,23 @@ class AIAgent:
                 f"{preview_line}"
                 f"\n[dim]No changes applied (dry-run mode).[/dim]"
             )
+            self._timeline_event(
+                "approval",
+                f"Dry-run preview for {tool_name}",
+                {"tool": tool_name, "decision": "dry_run"},
+            )
             return True
 
-        return self.ui.confirm(tool_name, tool_input, preview)
+        approved = self.ui.confirm(tool_name, tool_input, preview)
+        self._timeline_event(
+            "approval",
+            f"{'Approved' if approved else 'Denied'} {tool_name}",
+            {
+                "tool": tool_name,
+                "decision": "approved" if approved else "denied",
+            },
+        )
+        return approved
 
     def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         logging.info("Executing tool: %s with input: %s", tool_name, tool_input)
@@ -248,10 +304,34 @@ class AIAgent:
                 f"{json.dumps(tool_input)}"
             )
         try:
-            return tool.execute(**tool_input)
+            result = tool.execute(**tool_input)
         except Exception as exc:  # noqa: BLE001 - tool failures become model context
             logging.error("Error executing %s: %s", tool_name, exc)
+            if tool_name in self._write_tools:
+                self._timeline_event(
+                    "tool_error",
+                    f"{tool_name}: {exc}",
+                    {"tool": tool_name, "success": False},
+                )
             return f"Error executing {tool_name}: {exc}"
+
+        if tool_name in self._write_tools:
+            first_line = next(
+                (line.strip() for line in result.splitlines() if line.strip()),
+                "",
+            )
+            lowered = result.lower()
+            success = (
+                not result.startswith(("Error", "Unexpected error"))
+                and "cancelled by user" not in lowered
+                and "rolled back" not in lowered
+            )
+            self._timeline_event(
+                "tool_result",
+                f"{tool_name}: {first_line}",
+                {"tool": tool_name, "success": success},
+            )
+        return result
 
     def _classify_intent(self, user_input: str) -> Tuple[str, Optional[str]]:
         """Backwards-compatible wrapper around ``cliv.intent``."""
@@ -369,6 +449,7 @@ class AIAgent:
                 "10. Use `run_tests` or `run_command` only when the user asks you to run code. Both require explicit approval.\n"
                 "11. PROJECT INTELLIGENCE PROTOCOL: If asked to analyse, understand, map, or explain a repository, project, codebase, architecture, components, or dependencies, call `analyse_project` first. Base your answer on its report; do not guess.\n"
                 "12. TEST REPAIR PROTOCOL: If asked to fix tests or make the suite pass, call `run_tests`, inspect the failures, repair the source with `edit_file` or `multi_edit`, and rerun the tests. Do not weaken or delete tests to hide genuine bugs.\n"
+                "13. TIMELINE PROTOCOL: If asked what happened recently, what changed, or to review past work in this project, call `read_timeline` first and base your answer on its events.\n"
                 f"\nAvailable tools:\n{tool_list}"
             ),
         }
@@ -540,6 +621,19 @@ class AIAgent:
 
                 result = SelfHealingEngine(self).heal(target=target)
                 response = result.render()
+                self._timeline_event(
+                    "self_heal",
+                    f"Self-heal {result.status}",
+                    {
+                        "status": result.status,
+                        "attempts": len(result.attempts),
+                        "modified_files": result.modified_files,
+                        "initial": (
+                            result.initial.summary() if result.initial else None
+                        ),
+                        "final": result.final.summary() if result.final else None,
+                    },
+                )
             except Exception as exc:  # noqa: BLE001 - report, don't crash REPL
                 logging.exception("Self-healing failed")
                 response = f"Error: self-healing failed unexpectedly: {exc}"
@@ -565,6 +659,9 @@ class AIAgent:
         self._auto_check_mode()
 
         intent, target = self._classify_intent(user_input)
+        self._timeline_event(
+            "request", user_input, {"intent": intent}
+        )
         if intent == "self_heal":
             return self._finish_self_heal(target or "")
 
