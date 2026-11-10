@@ -17,8 +17,8 @@ FILE_EXTENSIONS = r"(?:py|js|ts|html|css|md|txt|json|yaml|yml|sh|rs|go|java|cpp|
 def classify_intent(user_input: str) -> Tuple[str, Optional[str]]:
     """Return ``(category, target)`` for a natural-language request.
 
-    Categories: conversation, project_analysis, file_create, file_read,
-    file_fix, file_remove, file_rename, list_dir, unknown.
+    Categories: conversation, project_analysis, self_heal, file_create,
+    file_read, file_fix, file_remove, file_rename, list_dir, unknown.
     """
 
     lowered = user_input.lower().strip()
@@ -59,6 +59,18 @@ def classify_intent(user_input: str) -> Tuple[str, Optional[str]]:
     ]
     if any(re.search(pattern, lowered) for pattern in project_analysis_patterns):
         return ("project_analysis", None)
+
+    self_heal_patterns = [
+        r"\b(?:fix|repair|heal)\s+(?:all\s+)?(?:the\s+)?(?:failing\s+)?tests?\b",
+        r"\b(?:fix|repair)\s+(?:the\s+)?test\s+(?:failures?|errors?)\b",
+        r"\b(?:make|get)\s+(?:the\s+)?tests?\s+(?:pass|green)\b",
+        r"\brun\s+(?:the\s+)?tests?\s+and\s+(?:fix|repair)\b",
+        r"\bself[-\s]?heal\b",
+        r"\bfix\s+all\s+(?:errors|bugs|failures)\s+in\s+(?:this|the)\s+(?:python\s+)?project\b",
+        r"\brepair\s+(?:this|the|my)\s+(?:python\s+)?project\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in self_heal_patterns):
+        return ("self_heal", extracted_file)
 
     if (
         re.search(

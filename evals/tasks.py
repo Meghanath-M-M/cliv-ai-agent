@@ -201,6 +201,33 @@ def _check_pytest(root: Path, response: str):
     return True, "pytest reported a pass"
 
 
+def _setup_self_heal(root: Path) -> None:
+    _write(root, "maths.py", "def add(a, b):\n    return a - b\n")
+    _write(
+        root,
+        "test_maths.py",
+        "from maths import add\n\n"
+        "def test_add():\n"
+        "    assert add(2, 3) == 5\n",
+    )
+
+
+def _check_self_heal(root: Path, response: str):
+    path = root / "maths.py"
+    if not path.exists():
+        return False, "maths.py disappeared"
+    try:
+        module = _import_module(root, "maths.py")
+        result = module.add(2, 3)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"could not import maths.py: {exc}"
+    if result != 5:
+        return False, f"add(2, 3) returned {result!r}, expected 5"
+    if "passed" not in response.lower():
+        return False, "self-healing report did not confirm passing tests"
+    return True, "failing tests were repaired and passed"
+
+
 def _setup_search(root: Path) -> None:
     _write(root, "circuits.py", "FLUX_CAPACITOR = 42\n")
 
@@ -293,6 +320,13 @@ TASKS: List[EvalTask] = [
         "Run the tests.",
         _setup_pytest,
         _check_pytest,
+        requires=("pytest",),
+    ),
+    EvalTask(
+        "self_heal_tests",
+        "Fix all failing tests.",
+        _setup_self_heal,
+        _check_self_heal,
         requires=("pytest",),
     ),
     EvalTask(

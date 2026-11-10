@@ -26,6 +26,8 @@ A terminal-based AI coding assistant that reads, edits, and debugs files in your
 
 - 🧬 **Project DNA** — Scans the repository, detects languages, extracts Python/JS/TS classes, functions, and imports, resolves internal dependencies, and builds an architecture report with components, entry points, cycles, duplicate functions, and unused dependencies. Run `cliv --project-dna`, or simply ask `Analyse this project.` It is read-only and also works through the offline intent router.
 
+- 🩺 **Self-Healing Test Loop** — Ask `Fix all failing tests.` CLIV runs pytest, parses the failures, asks the selected model for a small JSON repair plan, applies it through the normal diff/approval gate, and reruns the suite for up to two repair attempts. It works online or with Ollama, never edits files directly, and reports every attempt.
+
 - 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a unified diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
 
 - 🔒 **Project-Root Confinement** — Every file tool resolves paths against the project root and uses `Path.relative_to()` instead of string prefixes. Symlinks cannot escape the root. `.env`, private keys, `.ssh`, and similar secrets are blocked, and `.git` is write-protected.
@@ -122,6 +124,20 @@ cliv --offline "Understand this codebase."
 
 The report includes detected languages, architecture roles, components, entry points, declared and imported dependencies, internal dependency edges, cycles, and structural issues. Python is parsed with `ast`; JavaScript and TypeScript use a conservative import/symbol extractor. The tool is read-only and confined to the project root.
 
+### Self-healing tests
+
+Run the bounded repair loop directly from the prompt:
+
+```bash
+cliv "Fix all failing tests."
+cliv "Run tests and repair failures."
+cliv --yes "Make the tests pass."
+```
+
+CLIV runs `pytest` first, extracts failing test names and relevant source files, and sends a compact failure report to the model. The model must return a JSON plan with at most five edits. Each plan is validated against the project root and sensitive-file policy, then applied through the same combined diff and approval flow as `multi_edit`. Tests are rerun after each attempt, with a maximum of two repair attempts. If a run needs approval and you decline, the loop stops without changing anything.
+
+The loop is intentionally narrow: it does not run arbitrary commands, does not bypass approvals, and does not hide failures. `--dry-run` reports that self-healing is skipped because it needs to execute tests and apply edits.
+
 ### Offline mode
 
 ```bash
@@ -168,6 +184,7 @@ cliv/
 ├── security.py     ← project-root and sensitive-file policy
 ├── ui.py           ← UI boundary (Rich implementation + NullUI for tests)
 ├── intelligence/   ← Project DNA: scanner, parser, dependency graph, report
+├── healing/        ← bounded pytest repair loop and structured failure parsing
 ├── llm/            ← provider backends, model validation, fallback router
 └── tools/          ← dynamically loaded tool plugins
 ```
@@ -321,7 +338,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
+The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
 
 Run with coverage:
 
@@ -333,7 +350,7 @@ uv run pytest --cov=cliv --cov-report=term-missing
 
 ## 📊 Evaluation Set
 
-`evals/` contains 14 fixed tasks with machine-checkable pass/fail criteria: create a file, fix syntax, fix a logic bug, read a value, analyse a project architecture, list files, delete, rename, multi-file edit, create a package, run tests, semantic search, refuse a secret, and inspect a git diff.
+`evals/` contains 15 fixed tasks with machine-checkable pass/fail criteria: create a file, fix syntax, fix a logic bug, read a value, analyse a project architecture, list files, delete, rename, multi-file edit, create a package, run tests, repair failing tests, semantic search, refuse a secret, and inspect a git diff.
 
 ```bash
 python -m evals.run --list
@@ -355,6 +372,7 @@ Each task runs in a fresh temporary project. The runner prints per-task PASS/FAI
 - [x] Cached/incremental embeddings and vectorized similarity
 - [x] Groq model validation, ordered fallbacks, and tool-schema probing
 - [x] Project DNA: repository scanner, symbol parser, dependency graph, and architecture report
+- [x] Self-healing test loop with structured pytest parsing, bounded JSON repairs, and approval-gated reruns
 - [x] Context-window budget instead of a fixed message count
 - [x] Multi-file edits with a combined diff before approval
 - [x] Reproducible evaluation set with pass/fail scoring

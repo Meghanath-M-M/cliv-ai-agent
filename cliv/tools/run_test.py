@@ -1,7 +1,9 @@
 """Run pytest with approval and a project-root working directory."""
 
+import os
 import subprocess
 import sys
+import tempfile
 from typing import Any, Dict, Optional
 
 from cliv.security import project_root, resolve_project_path
@@ -51,13 +53,20 @@ class RunTestsTool(BaseTool):
             command.append(target)
 
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                cwd=project_root(),
-                timeout=120,
-            )
+            # Isolate bytecode caches.  A repair can rewrite a file with the
+            # same size within the same mtime second; without this, pytest
+            # may import a stale .pyc and report a failure that was fixed.
+            with tempfile.TemporaryDirectory(prefix="cliv-pycache-") as cache_dir:
+                env = os.environ.copy()
+                env["PYTHONPYCACHEPREFIX"] = cache_dir
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    cwd=project_root(),
+                    env=env,
+                    timeout=120,
+                )
             output = result.stdout.strip()
             if result.stderr:
                 output += f"\nErrors:\n{result.stderr.strip()}"

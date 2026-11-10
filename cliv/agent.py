@@ -368,6 +368,7 @@ class AIAgent:
                 "9. All file tools are confined to the project directory. Do not try to read `.env`, private keys, or files outside the project; those accesses are blocked.\n"
                 "10. Use `run_tests` or `run_command` only when the user asks you to run code. Both require explicit approval.\n"
                 "11. PROJECT INTELLIGENCE PROTOCOL: If asked to analyse, understand, map, or explain a repository, project, codebase, architecture, components, or dependencies, call `analyse_project` first. Base your answer on its report; do not guess.\n"
+                "12. TEST REPAIR PROTOCOL: If asked to fix tests or make the suite pass, call `run_tests`, inspect the failures, repair the source with `edit_file` or `multi_edit`, and rerun the tests. Do not weaken or delete tests to hide genuine bugs.\n"
                 f"\nAvailable tools:\n{tool_list}"
             ),
         }
@@ -525,6 +526,32 @@ class AIAgent:
         self._save_history()
         return response
 
+    def _finish_self_heal(self, target: str = "") -> str:
+        """Run the test repair loop and record its report as the reply."""
+
+        if self.backend is None:
+            response = (
+                "Error: Self-healing needs an LLM backend to generate repairs. "
+                "Install `cliv[online]` or run a local Ollama model."
+            )
+        else:
+            try:
+                from cliv.healing import SelfHealingEngine
+
+                result = SelfHealingEngine(self).heal(target=target)
+                response = result.render()
+            except Exception as exc:  # noqa: BLE001 - report, don't crash REPL
+                logging.exception("Self-healing failed")
+                response = f"Error: self-healing failed unexpectedly: {exc}"
+        self.messages.append({"role": "assistant", "content": response})
+        self._save_history()
+        return response
+
+    def self_heal(self, target: str = "") -> str:
+        """Public entry point for the bounded test-repair workflow."""
+
+        return self._finish_self_heal(target)
+
     def chat(self, user_input: str) -> str:
         """Run one conversation turn.
 
@@ -536,6 +563,10 @@ class AIAgent:
         self.messages.append({"role": "user", "content": user_input})
         self._save_history()
         self._auto_check_mode()
+
+        intent, target = self._classify_intent(user_input)
+        if intent == "self_heal":
+            return self._finish_self_heal(target or "")
 
         if self.mode == "offline":
             if not self.use_offline_tools or self.backend is None:
