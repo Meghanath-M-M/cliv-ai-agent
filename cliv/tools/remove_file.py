@@ -1,7 +1,9 @@
 """Tool to remove/delete files on disk."""
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 
+from cliv.risk import assess_delete
 from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
@@ -21,6 +23,14 @@ class RemoveFileTool(BaseTool):
         "required": ["path"],
     }
 
+    def affected_paths(self, tool_input: Dict[str, Any]) -> list[Path]:
+        resolved, error = resolve_project_path(
+            str(tool_input.get("path", "")), for_write=True
+        )
+        if resolved is None or error or not resolved.exists():
+            return []
+        return [resolved]
+
     def preview(self, tool_input: Dict[str, Any]) -> Optional[str]:
         path = str(tool_input.get("path", ""))
         resolved, error = resolve_project_path(path, for_write=True)
@@ -29,7 +39,8 @@ class RemoveFileTool(BaseTool):
         assert resolved is not None
         if not resolved.exists():
             return f"Error: File not found: {path}"
-        return f"Will permanently delete: {resolved}"
+        risk = assess_delete(resolved)
+        return f"{risk.render()}\nWill permanently delete: {resolved}"
 
     def execute(self, path: str, **kwargs) -> str:
         file_path, error = resolve_project_path(path, for_write=True)

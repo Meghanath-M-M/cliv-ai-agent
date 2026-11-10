@@ -17,6 +17,7 @@ def isolate_timeline_db(tmp_path, monkeypatch):
     """Keep timeline telemetry out of the user's real config directory."""
 
     monkeypatch.setenv("CLIV_TIMELINE_DB", str(tmp_path / "timeline.db"))
+    monkeypatch.setenv("CLIV_SNAPSHOT_DIR", str(tmp_path / "snapshots"))
 
 
 @pytest.fixture

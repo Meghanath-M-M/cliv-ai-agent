@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from cliv.diffs import preview_edit
+from cliv.diffs import preview_changes
 from cliv.security import resolve_project_path
 from cliv.tools.base import BaseTool
 
@@ -91,20 +91,36 @@ class MultiEditTool(BaseTool):
 
         return state, None
 
+    def affected_paths(self, tool_input: Dict[str, Any]) -> List[Path]:
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return []
+        paths: List[Path] = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                continue
+            resolved, error = resolve_project_path(
+                str(edit.get("path", "")), for_write=True
+            )
+            if resolved is not None and not error and resolved not in paths:
+                paths.append(resolved)
+        return paths
+
     def preview(self, tool_input: Dict[str, Any]) -> Optional[str]:
         state, error = self._prepare(tool_input.get("edits"))
         if error:
             return error
         assert state is not None
 
-        chunks = []
+        changes: List[Tuple[Path, str, str]] = []
+        notes: List[str] = []
         for path, (existed, original, current) in state.items():
             if original == current:
                 if not existed:
-                    chunks.append(f"Create empty file: {path}")
+                    notes.append(f"Create empty file: {path}")
                 continue
-            chunks.append(preview_edit(path, original, current))
-        return "\n".join(chunks) if chunks else "No changes would be made."
+            changes.append((path, original, current))
+        return preview_changes(changes, notes=notes)
 
     def execute(self, edits: Any = None, **kwargs) -> str:
         state, error = self._prepare(edits)

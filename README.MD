@@ -28,9 +28,13 @@ A terminal-based AI coding assistant that reads, edits, and debugs files in your
 
 - 🩺 **Self-Healing Test Loop** — Ask `Fix all failing tests.` CLIV runs pytest, parses the failures, asks the selected model for a small JSON repair plan, applies it through the normal diff/approval gate, and reruns the suite for up to two repair attempts. It works online or with Ollama, never edits files directly, and reports every attempt.
 
-- 🕒 **Development Timeline** — An append-only local SQLite log of sessions, requests, approvals, tool results, test outcomes, and self-heal runs, scoped by project. Run `cliv --timeline` for a compact recent-history view, or let the agent call the read-only `read_timeline` tool. The log stores summaries rather than file contents and lives at `~/.config/cliv/timeline.db`.
+- 🕒 **Development Timeline** — An append-only local SQLite log of sessions, requests, approvals, tool results, test outcomes, self-heal runs, snapshots, and undo operations, scoped by project. Run `cliv --timeline` for a compact recent-history view, or let the agent call the read-only `read_timeline` tool. The log stores summaries rather than file contents and lives at `~/.config/cliv/timeline.db`.
 
-- 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a unified diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
+- 🎨 **Risk-Aware Visual Diffs** — Every edit preview carries a LOW/MEDIUM/HIGH/CRITICAL risk assessment with concrete reasons. Wide terminals get a syntax-highlighted side-by-side diff; narrow terminals and logs keep a colored unified diff. Dependency files, CI workflows, security code, test removals, large deletions, and unsafe code additions are called out before approval.
+
+- ⏪ **Safety Snapshots & Time-Travel Undo** — CLIV captures the original bytes of every file immediately before an approved write or deletion. Run `cliv undo` to restore the most recent applied operation, or `cliv snapshots` to inspect the safety history. Undo refuses to overwrite later edits unless you explicitly force it.
+
+- 🛡️ **Human-in-the-Loop Safety** — Writes, edits, multi-file patches, deletions, test runs, and commands require explicit approval. Edits show a risk-aware diff first. `--yes` auto-approves; `--dry-run` previews without applying changes.
 
 - 🔒 **Project-Root Confinement** — Every file tool resolves paths against the project root and uses `Path.relative_to()` instead of string prefixes. Symlinks cannot escape the root. `.env`, private keys, `.ssh`, and similar secrets are blocked, and `.git` is write-protected.
 
@@ -148,7 +152,26 @@ Inspect what CLIV has done in this project:
 cliv --timeline
 ```
 
-The timeline is an append-only SQLite database at `~/.config/cliv/timeline.db` (override with `CLIV_TIMELINE_DB`). It records session starts, requests, approval decisions, write/test tool results, and self-heal summaries. Events are scoped by project root, so a repository only shows its own history. Database triggers reject updates and deletes. The agent can also query it through the read-only `read_timeline` tool, for example: `What have we done recently?`
+The timeline is an append-only SQLite database at `~/.config/cliv/timeline.db` (override with `CLIV_TIMELINE_DB`). It records session starts, requests, approval decisions, write/test tool results, self-heal summaries, safety snapshots, and undo operations. Events are scoped by project root, so a repository only shows its own history. Database triggers reject updates and deletes. The agent can also query it through the read-only `read_timeline` tool, for example: `What have we done recently?`
+
+### Review and undo changes
+
+Before an approved write or deletion, CLIV captures the affected files in a local safety snapshot. The approval prompt then shows:
+
+- the risk level and the reasons behind it;
+- a syntax-highlighted side-by-side diff on wide terminals;
+- a colored unified diff on narrow terminals and in logs.
+
+After an operation, inspect or reverse it:
+
+```bash
+cliv snapshots              # list recent snapshots
+cliv undo                   # restore the last applied snapshot
+cliv undo 20261110T...      # restore a specific snapshot
+cliv undo --yes             # skip the confirmation prompt
+```
+
+Snapshots live outside the repository at `~/.config/cliv/snapshots/` (override with `CLIV_SNAPSHOT_DIR`). Undo verifies that each file still matches the state produced by the original operation. If another edit changed a file in the meantime, CLIV stops instead of clobbering it. Use `--force` only when you deliberately want to discard those later edits.
 
 ### Offline mode
 
@@ -194,6 +217,9 @@ cliv/
 ├── offline.py      ← deterministic offline file workflows
 ├── sanitizer.py    ← defensive parsing shield
 ├── security.py     ← project-root and sensitive-file policy
+├── risk.py         ← path-aware risk classification for changes
+├── diff_view.py    ← risk-aware, syntax-highlighted approval rendering
+├── snapshots.py    ← pre-write file snapshots, conflict checks, and undo
 ├── ui.py           ← UI boundary (Rich implementation + NullUI for tests)
 ├── intelligence/   ← Project DNA: scanner, parser, dependency graph, report
 ├── healing/        ← bounded pytest repair loop and structured failure parsing
@@ -264,9 +290,9 @@ The shield strips markdown fences, parses the JSON, and recovers **read-only** c
 | `run_tests` | Run pytest in the project root | **Yes** |
 | `run_command` | Run an allowlisted executable without a shell | **Yes** |
 | `git_diff` | Show repository status and uncommitted changes | No |
-| `edit_file` | Write or patch a file; shows a diff before approval | **Yes** |
-| `multi_edit` | Apply several edits; shows one combined diff | **Yes** |
-| `remove_file` | Permanently delete a file | **Yes** |
+| `edit_file` | Write or patch a file; shows a risk-aware diff and captures a snapshot | **Yes** |
+| `multi_edit` | Apply several edits; shows one combined risk-aware diff and captures all files | **Yes** |
+| `remove_file` | Delete a file; captures a snapshot and shows deletion risk | **Yes** |
 
 `run_tests` and `run_command` require approval because pytest imports project code and allowlisted tools such as Python and Git can still have side effects. `run_command` rejects shell metacharacters by construction: it takes a bare executable name plus an argument list and calls `subprocess.run(..., shell=False)`.
 
@@ -299,6 +325,9 @@ class ReadFileTool(BaseTool):
 - Commands use an explicit allowlist (`CLIV_ALLOWED_COMMANDS` can extend it) and run without a shell.
 - API keys are saved with `0600` permissions on POSIX.
 - The timeline database is created with `0600` permissions on POSIX and rejects updates/deletes through append-only triggers.
+- Before an approved file write or deletion, the agent captures a safety snapshot of the affected files. Snapshots are stored outside the project with restrictive permissions and are scoped by project root.
+- Undo checks the post-operation file hashes first and refuses to overwrite files that changed after the snapshot unless `--force` is supplied.
+- Approval previews classify changes as LOW/MEDIUM/HIGH/CRITICAL and call out dependency files, CI configuration, security code, deleted tests, large deletions, and unsafe code patterns.
 
 ---
 
@@ -312,7 +341,7 @@ class ReadFileTool(BaseTool):
 | Interactive prompt | On first launch | Fallback |
 | Force offline | `cliv --offline` | Overrides all of the above |
 
-History and logs live alongside the config: `~/.config/cliv/history.json` and `~/.config/cliv/agent.log`. The embedding cache is `~/.config/cliv/embeddings.json`. The development timeline is `~/.config/cliv/timeline.db`; set `CLIV_TIMELINE_DB` to use another path. Logs rotate at 5 MB with three backups.
+History and logs live alongside the config: `~/.config/cliv/history.json` and `~/.config/cliv/agent.log`. The embedding cache is `~/.config/cliv/embeddings.json`. The development timeline is `~/.config/cliv/timeline.db`; set `CLIV_TIMELINE_DB` to use another path. Safety snapshots live under `~/.config/cliv/snapshots/`; set `CLIV_SNAPSHOT_DIR` to move them. Logs rotate at 5 MB with three backups.
 
 ### Model selection and fallback
 
@@ -353,7 +382,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-The suite covers the agent loop, approval flow, path security, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, the append-only development timeline, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
+The suite covers the agent loop, approval flow, path security, risk classification, diff rendering, safety snapshots and undo, history trimming, backends, tool behavior, Project DNA scanning/graphs, the self-healing repair loop, the append-only development timeline, offline intent routing, RAG caching, config permissions, and the eval harness. CI runs it on Python 3.11, 3.12, and 3.13.
 
 Run with coverage:
 
@@ -389,6 +418,8 @@ Each task runs in a fresh temporary project. The runner prints per-task PASS/FAI
 - [x] Project DNA: repository scanner, symbol parser, dependency graph, and architecture report
 - [x] Self-healing test loop with structured pytest parsing, bounded JSON repairs, and approval-gated reruns
 - [x] Development Intelligence Timeline: append-only SQLite event log, CLI view, and read-only agent tool
+- [x] Risk-aware visual diffs: syntax-highlighted side-by-side review with risk levels and concrete reasons
+- [x] Safety snapshots and time-travel undo: pre-write capture, conflict-aware rollback, and `cliv undo`
 - [x] Context-window budget instead of a fixed message count
 - [x] Multi-file edits with a combined diff before approval
 - [x] Reproducible evaluation set with pass/fail scoring

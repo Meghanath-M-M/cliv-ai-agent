@@ -106,6 +106,7 @@ class TestEditFile:
         )
         assert "-print('old')" in preview
         assert "+print('new')" in preview
+        assert "RISK:" in preview
 
 
 class TestRemoveFile:
@@ -129,6 +130,13 @@ class TestRemoveFile:
         (project_dir / ".git" / "config").write_text("secret")
         result = RemoveFileTool().execute(path=".git/config")
         assert "blocked" in result
+
+    def test_preview_shows_deletion_risk(self, project_dir):
+        path = project_dir / "delete_me.py"
+        path.write_text("print('bye')\n")
+        preview = RemoveFileTool().preview({"path": "delete_me.py"})
+        assert "RISK: HIGH" in preview
+        assert "Will permanently delete" in preview
 
 
 class TestMultiEdit:

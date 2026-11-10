@@ -94,7 +94,31 @@ def main():
         action="store_true",
         help="Print the recent development timeline for the current directory and exit",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--snapshots",
+        action="store_true",
+        help="List recent safety snapshots for the current directory and exit",
+    )
+    parser.add_argument(
+        "--undo",
+        nargs="?",
+        const="last",
+        metavar="SNAPSHOT_ID",
+        help="Restore the last safety snapshot, or a specific snapshot id, and exit",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow --undo to overwrite files changed after the snapshot",
+    )
+
+    # Friendly aliases: ``cliv undo`` and ``cliv snapshots``.
+    argv = sys.argv[1:]
+    if argv and argv[0] == "undo":
+        argv = ["--undo", *argv[1:]]
+    elif argv and argv[0] == "snapshots":
+        argv = ["--snapshots", *argv[1:]]
+    args = parser.parse_args(argv)
 
     # Validate conflicting flags
     if args.yes and args.dry_run:
@@ -102,6 +126,90 @@ def main():
             "[bold red]Error: --yes and --dry-run are mutually exclusive.[/bold red]"
         )
         sys.exit(1)
+    if args.snapshots and args.undo:
+        console.print(
+            "[bold red]Error: --snapshots and --undo are mutually exclusive.[/bold red]"
+        )
+        sys.exit(1)
+    if (args.snapshots or args.undo) and args.prompt:
+        console.print(
+            "[bold red]Error: --snapshots/--undo cannot be combined with a prompt.[/bold red]"
+        )
+        sys.exit(1)
+    if args.force and not args.undo:
+        console.print(
+            "[bold red]Error: --force can only be used with --undo.[/bold red]"
+        )
+        sys.exit(1)
+
+    if args.snapshots:
+        from cliv.snapshots import SnapshotStore, render_snapshots
+
+        try:
+            store = SnapshotStore()
+            console.print(
+                render_snapshots(store.recent(limit=25)), markup=False
+            )
+        except Exception as exc:  # noqa: BLE001 - keep CLI failures readable
+            console.print(f"[bold red]Snapshots failed:[/bold red] {exc}")
+            sys.exit(1)
+        return
+
+    if args.undo:
+        from cliv.snapshots import SnapshotStore, render_snapshot
+        from cliv.timeline import TimelineStore
+
+        try:
+            store = SnapshotStore()
+            selector = str(args.undo or "last")
+            if selector in {"last", "latest"}:
+                snapshot = store.latest_applied()
+            else:
+                snapshot = store.get(selector)
+            if snapshot is None:
+                console.print("[bold yellow]No applied snapshots to undo.[/bold yellow]")
+                return
+            console.print(render_snapshot(snapshot), markup=False)
+            if snapshot.status != "applied":
+                console.print(
+                    f"[bold yellow]Snapshot is {snapshot.status}; nothing to undo.[/bold yellow]"
+                )
+                return
+            if not args.yes:
+                try:
+                    answer = input("Restore these files? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n[bold yellow]Undo cancelled.[/bold yellow]")
+                    return
+                if answer not in {"y", "yes"}:
+                    console.print("[bold yellow]Undo cancelled.[/bold yellow]")
+                    return
+            result = store.rollback(snapshot.id, force=args.force)
+            if result.success:
+                console.print(f"[bold green]{result.message}[/bold green]")
+            else:
+                console.print(f"[bold red]{result.message}[/bold red]")
+                for conflict in result.conflicts:
+                    console.print(f"[dim]  - {conflict}[/dim]")
+            try:
+                TimelineStore().record(
+                    "undo",
+                    f"Undo {snapshot.id}: {'restored' if result.success else 'failed'}",
+                    {
+                        "snapshot_id": snapshot.id,
+                        "success": result.success,
+                        "files": [entry.path for entry in snapshot.files],
+                        "conflicts": list(result.conflicts),
+                    },
+                )
+            except Exception:  # noqa: BLE001 - telemetry must not change the result
+                pass
+            if not result.success:
+                sys.exit(1)
+        except Exception as exc:  # noqa: BLE001 - keep CLI failures readable
+            console.print(f"[bold red]Undo failed:[/bold red] {exc}")
+            sys.exit(1)
+        return
 
     if args.timeline:
         from cliv.timeline import TimelineStore, render_timeline
@@ -183,6 +291,14 @@ def main():
     except Exception as exc:  # noqa: BLE001 - timeline is optional telemetry
         console.print(f"[dim]Timeline disabled: {exc}[/dim]")
 
+    snapshot_store = None
+    try:
+        from cliv.snapshots import SnapshotStore
+
+        snapshot_store = SnapshotStore()
+    except Exception as exc:  # noqa: BLE001 - snapshots are a safety feature
+        console.print(f"[bold yellow]Safety snapshots disabled:[/bold yellow] {exc}")
+
     with console.status("[dim]Configuring and validating model...[/dim]", spinner="dots"):
         agent = AIAgent(
             api_key=api_key,
@@ -193,6 +309,7 @@ def main():
             use_offline_tools=not args.legacy_offline,
             ui=ConsoleUI(console),
             timeline_store=timeline_store,
+            snapshot_store=snapshot_store,
         )
 
     # Print mode banner

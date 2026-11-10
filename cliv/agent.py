@@ -36,6 +36,7 @@ from cliv.tools.loader import load_tools
 from cliv.ui import ConsoleUI, UI
 
 if TYPE_CHECKING:
+    from cliv.snapshots import SnapshotStore
     from cliv.timeline import TimelineStore
 
 # Re-exported for backwards compatibility with older imports/tests.
@@ -112,6 +113,7 @@ class AIAgent:
         use_offline_tools: bool = True,
         internet_check=None,
         timeline_store: Optional["TimelineStore"] = None,
+        snapshot_store: Optional["SnapshotStore"] = None,
     ):
         self.api_key = api_key
         self.local_model = local_model
@@ -133,6 +135,7 @@ class AIAgent:
         self._write_tools = set(self.WRITE_TOOLS)
         self.model_notices: List[str] = []
         self.timeline = timeline_store
+        self.snapshots = snapshot_store
         self.session_id = uuid.uuid4().hex
 
         if backend is not None:
@@ -168,10 +171,18 @@ class AIAgent:
         event_type: str,
         summary: str,
         details: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[int]:
         if self.timeline is None:
-            return
+            return None
         try:
+            if hasattr(self.timeline, "record_event"):
+                return self.timeline.record_event(
+                    event_type,
+                    summary,
+                    details,
+                    project=project_root(),
+                    session_id=self.session_id,
+                )
             self.timeline.record(
                 event_type,
                 summary,
@@ -181,6 +192,7 @@ class AIAgent:
             )
         except Exception as exc:  # noqa: BLE001 - telemetry must never break work
             logging.warning("Timeline write failed: %s", exc)
+        return None
 
     @staticmethod
     def _check_internet(
@@ -252,14 +264,21 @@ class AIAgent:
         preview = tool.preview(tool_input) if tool else None
 
         if self.dry_run:
-            preview_line = f"\nPreview:\n{preview}" if preview else ""
             self.ui.print(
                 f"\n[bold blue]DRY RUN[/bold blue]"
                 f"\nTool: [cyan]{tool_name}[/cyan]"
-                f"\nArgs: [dim]{json.dumps(tool_input, indent=2)}[/dim]"
-                f"{preview_line}"
-                f"\n[dim]No changes applied (dry-run mode).[/dim]"
             )
+            self.ui.print(
+                f"Args: {json.dumps(tool_input, indent=2)}", markup=False
+            )
+            if preview:
+                self.ui.print("\nPreview:")
+                print_preview = getattr(self.ui, "print_preview", None)
+                if callable(print_preview):
+                    print_preview(preview)
+                else:
+                    self.ui.print(preview, markup=False)
+            self.ui.print("\n[dim]No changes applied (dry-run mode).[/dim]")
             self._timeline_event(
                 "approval",
                 f"Dry-run preview for {tool_name}",
@@ -303,15 +322,71 @@ class AIAgent:
                 f"[DRY RUN] Would execute {tool_name} with args: "
                 f"{json.dumps(tool_input)}"
             )
+
+        snapshot = None
+        snapshot_id: Optional[str] = None
+        if self.snapshots is not None and tool_name in self._write_tools:
+            try:
+                paths = tool.affected_paths(tool_input)
+            except Exception as exc:  # noqa: BLE001
+                self._timeline_event(
+                    "snapshot_error",
+                    f"{tool_name}: could not determine affected files",
+                    {"tool": tool_name, "error": str(exc)},
+                )
+                return (
+                    f"Error: Could not determine files to snapshot; "
+                    f"{tool_name} was not executed: {exc}"
+                )
+            if paths:
+                try:
+                    snapshot = self.snapshots.capture(
+                        paths,
+                        tool=tool_name,
+                        summary=f"Before {tool_name}",
+                        session_id=self.session_id,
+                    )
+                    snapshot_id = snapshot.id
+                    self._timeline_event(
+                        "snapshot",
+                        f"Snapshot {snapshot.id} before {tool_name}",
+                        {
+                            "snapshot_id": snapshot.id,
+                            "tool": tool_name,
+                            "files": [entry.path for entry in snapshot.files],
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._timeline_event(
+                        "snapshot_error",
+                        f"{tool_name}: snapshot creation failed",
+                        {"tool": tool_name, "error": str(exc)},
+                    )
+                    return (
+                        f"Error: Could not create a safety snapshot; "
+                        f"{tool_name} was not executed: {exc}"
+                    )
+
         try:
             result = tool.execute(**tool_input)
         except Exception as exc:  # noqa: BLE001 - tool failures become model context
             logging.error("Error executing %s: %s", tool_name, exc)
+            if snapshot is not None:
+                try:
+                    self.snapshots.mark_failed(snapshot_id)
+                except Exception:  # noqa: BLE001
+                    logging.warning("Could not mark snapshot failed", exc_info=True)
             if tool_name in self._write_tools:
+                details: Dict[str, Any] = {
+                    "tool": tool_name,
+                    "success": False,
+                }
+                if snapshot_id:
+                    details["snapshot_id"] = snapshot_id
                 self._timeline_event(
                     "tool_error",
                     f"{tool_name}: {exc}",
-                    {"tool": tool_name, "success": False},
+                    details,
                 )
             return f"Error executing {tool_name}: {exc}"
 
@@ -326,10 +401,30 @@ class AIAgent:
                 and "cancelled by user" not in lowered
                 and "rolled back" not in lowered
             )
+            if snapshot is not None:
+                try:
+                    if success:
+                        self.snapshots.mark_applied(snapshot_id)
+                    else:
+                        self.snapshots.mark_failed(snapshot_id)
+                except Exception as exc:  # noqa: BLE001
+                    logging.warning("Could not finalize snapshot: %s", exc)
+                    self._timeline_event(
+                        "snapshot_error",
+                        f"{tool_name}: could not finalize snapshot",
+                        {
+                            "tool": tool_name,
+                            "snapshot_id": snapshot_id,
+                            "error": str(exc),
+                        },
+                    )
+            details = {"tool": tool_name, "success": success}
+            if snapshot_id:
+                details["snapshot_id"] = snapshot_id
             self._timeline_event(
                 "tool_result",
                 f"{tool_name}: {first_line}",
-                {"tool": tool_name, "success": success},
+                details,
             )
         return result
 

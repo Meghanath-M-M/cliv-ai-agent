@@ -100,6 +100,25 @@ class TimelineStore:
     ) -> bool:
         """Append one event.  Failures are non-fatal for the caller."""
 
+        return self.record_event(
+            event_type,
+            summary,
+            details,
+            project=project,
+            session_id=session_id,
+        ) is not None
+
+    def record_event(
+        self,
+        event_type: str,
+        summary: str,
+        details: Optional[Dict[str, Any]] = None,
+        *,
+        project: Optional[Path] = None,
+        session_id: str = "",
+    ) -> Optional[int]:
+        """Append one event and return its row id, or ``None`` on failure."""
+
         try:
             root = (project or project_root()).resolve()
         except (OSError, RuntimeError):
@@ -117,7 +136,7 @@ class TimelineStore:
 
         try:
             with self._connect() as connection:
-                connection.execute(
+                cursor = connection.execute(
                     """
                     INSERT INTO events
                         (created_at, project_root, session_id, event_type,
@@ -133,9 +152,10 @@ class TimelineStore:
                         raw_details,
                     ),
                 )
-            return True
+                event_id = cursor.lastrowid
+            return int(event_id) if event_id is not None else None
         except (OSError, sqlite3.Error):
-            return False
+            return None
 
     def recent(
         self,

@@ -38,6 +38,10 @@ class EditFileTool(BaseTool):
     def _target(self, path: str):
         return resolve_project_path(path, for_write=True)
 
+    def affected_paths(self, tool_input: Dict[str, Any]) -> list[Path]:
+        resolved, error = self._target(str(tool_input.get("path", "")))
+        return [resolved] if resolved is not None and not error else []
+
     def preview(self, tool_input: Dict[str, Any]) -> Optional[str]:
         path = str(tool_input.get("path", ""))
         new_string = str(tool_input.get("new_string", ""))

@@ -11,6 +11,9 @@ from contextlib import nullcontext
 from typing import Any, Dict, Optional, Protocol
 
 from rich.console import Console
+from rich.markup import escape
+
+from cliv.diff_view import render_preview
 
 
 class UI(Protocol):
@@ -18,6 +21,9 @@ class UI(Protocol):
         ...
 
     def print(self, message: str = "", **kwargs: Any) -> None:
+        ...
+
+    def print_preview(self, preview: str) -> None:
         ...
 
     def confirm(
@@ -42,6 +48,9 @@ class NullUI:
     def print(self, message: str = "", **kwargs: Any) -> None:
         pass
 
+    def print_preview(self, preview: str) -> None:
+        pass
+
     def confirm(
         self,
         tool_name: str,
@@ -64,6 +73,9 @@ class ConsoleUI:
     def print(self, message: str = "", **kwargs: Any) -> None:
         self.console.print(message, **kwargs)
 
+    def print_preview(self, preview: str) -> None:
+        render_preview(preview, self.console)
+
     def confirm(
         self,
         tool_name: str,
@@ -77,11 +89,12 @@ class ConsoleUI:
             args_text = args_text[:1500] + "\n... [args truncated]"
         self.console.print(
             f"\n[bold yellow]Approval Required[/bold yellow]"
-            f"\nTool: [cyan]{tool_name}[/cyan]"
-            f"\nArgs: [dim]{args_text}[/dim]"
+            f"\nTool: [cyan]{escape(tool_name)}[/cyan]"
+            f"\nArgs: [dim]{escape(args_text)}[/dim]"
         )
         if preview:
-            self.console.print(f"\n[bold]Proposed change:[/bold]\n{preview}")
+            self.console.print("\n[bold]Proposed change:[/bold]")
+            render_preview(preview, self.console)
         try:
             self.console.print("[bold yellow]Proceed? [Y/N]: [/bold yellow]", end="")
             response = input().strip().lower()
