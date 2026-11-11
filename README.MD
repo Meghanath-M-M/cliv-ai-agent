@@ -1,4 +1,15 @@
-# > cliv_
+<div align="center">
+
+<pre>
+ ██████╗██╗     ██╗██╗   ██╗
+██╔════╝██║     ██║██║   ██║
+██║     ██║     ██║██║   ██║
+██║     ██║     ██║╚██╗ ██╔╝
+╚██████╗███████╗██║ ╚████╔╝ 
+ ╚═════╝╚══════╝╚═╝  ╚═══╝ 
+</pre>
+
+# cliv
 
 **Terminal-native intelligence for your local codebase.**
 
@@ -10,6 +21,8 @@ A high-performance, privacy-first terminal AI coding assistant that reads, edits
 [![CI Tests](https://img.shields.io/badge/tests-436%20passed-brightgreen.svg)](https://github.com/Meghanath-M-M/cliv-ai-agent)
 [![Powered by Groq](https://img.shields.io/badge/Cloud-Groq%20LPU-orange)](https://console.groq.com/)
 [![Local Ollama](https://img.shields.io/badge/Local-Ollama-green)](https://ollama.com/)
+
+</div>
 
 ---
 
