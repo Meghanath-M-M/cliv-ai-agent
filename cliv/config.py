@@ -21,6 +21,7 @@ SNAPSHOT_DIR = CONFIG_DIR / "snapshots"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
 PLUGINS_DIR = CONFIG_DIR / "plugins"
 MEMORY_FILE = CONFIG_DIR / "memory.json"
+WORKSPACES_FILE = CONFIG_DIR / "workspaces.json"
 
 # The primary online model plus ordered fallbacks.  Availability and tool
 # compatibility are checked at startup, so a retired model does not break

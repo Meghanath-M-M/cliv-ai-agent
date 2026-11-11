@@ -6,6 +6,12 @@ from cliv.llm.base import (
     LLMBackend,
     ToolCallingUnsupported,
 )
+from cliv.llm.discovery import (
+    check_model_health,
+    is_ollama_running,
+    list_groq_models,
+    list_ollama_models,
+)
 from cliv.llm.groq_backend import GroqBackend
 from cliv.llm.ollama_backend import OllamaBackend
 from cliv.llm.router import build_backend
@@ -18,4 +24,8 @@ __all__ = [
     "OllamaBackend",
     "ToolCallingUnsupported",
     "build_backend",
+    "check_model_health",
+    "is_ollama_running",
+    "list_groq_models",
+    "list_ollama_models",
 ]

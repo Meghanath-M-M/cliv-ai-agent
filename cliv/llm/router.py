@@ -19,6 +19,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from cliv.config import get_groq_fallback_models, get_groq_model
 from cliv.llm.base import BackendError, LLMBackend
+from cliv.llm.discovery import (
+    check_model_health,
+    is_ollama_running,
+    list_groq_models,
+    list_ollama_models,
+)
 from cliv.llm.groq_backend import GroqBackend
 from cliv.llm.ollama_backend import OllamaBackend
 from cliv.models import SessionStats

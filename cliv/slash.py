@@ -29,6 +29,8 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
+from cliv.llm.discovery import check_model_health, is_ollama_running, list_ollama_models
+
 if TYPE_CHECKING:
     from cliv.agent import AIAgent
 
@@ -104,6 +106,7 @@ def handle_help(ctx: SlashContext, args: str) -> bool:
         ("/export [path]",    "Export session to Markdown or JSON",  "/export session.md"),
         ("/import <path|id>", "Import a past session into context",  "/import session.json"),
         ("/sessions [n]",     "List archived conversation sessions", "/sessions 10"),
+        ("/workspace",        "Manage multi-repo workspaces",        "/workspace add ../api  or  /workspace list"),
         ("/exit",             "Exit the session (also: quit)",       "/exit"),
     ]
     for cmd, desc, example in rows:
@@ -287,34 +290,204 @@ def handle_history(ctx: SlashContext, args: str) -> bool:
 def handle_model(ctx: SlashContext, args: str) -> bool:
     name = args.strip()
     backend = ctx.agent.backend
+    current = getattr(backend, "model", None) or ctx.agent.local_model
+    mode = ctx.agent.mode
 
-    if not name:
-        # Show current model
-        current = getattr(backend, "model", None) or ctx.agent.local_model
-        mode = ctx.agent.mode
+    health = check_model_health(
+        current_model=current,
+        current_mode=mode,
+    )
+    ollama_info = health.get("ollama", {})
+    groq_info = health.get("groq", {})
+
+    if not name or name in ("list", "ls", "status"):
+        tier = "direct tool calling" if getattr(ctx.agent, "use_offline_tools", True) else "intent fallback"
         ctx.console.print(
-            f"Current model: [bold]{current}[/bold]  "
-            f"Mode: [bold]{mode.upper()}[/bold]"
+            f"\nActive Model: [bold cyan]{current}[/bold cyan]  "
+            f"Mode: [bold]{mode.upper()}[/bold] ({tier})\n"
         )
+
+        tbl = Table(title="Available Models", box=None, padding=(0, 2))
+        tbl.add_column("Provider", style="bold cyan", no_wrap=True)
+        tbl.add_column("Model Name", style="bold", no_wrap=True)
+        tbl.add_column("Tool Calling", no_wrap=True)
+        tbl.add_column("Size / Spec", style="dim")
+        tbl.add_column("Status")
+
+        has_any = False
+        if ollama_info["models"]:
+            for m in ollama_info["models"]:
+                has_any = True
+                is_active = (m["name"] == current and mode == "offline")
+                status = "[bold green]● Active[/bold green]" if is_active else "[green]✓ Ready[/green]"
+                tools_str = "[green]✓ Yes[/green]" if m.get("supports_tools") else "[yellow]Intent only[/yellow]"
+                spec = f"{m.get('parameter_size') or '?'} ({m.get('size_gb', 0)} GB)"
+                tbl.add_row("Ollama", m["name"], tools_str, spec, status)
+
+        if groq_info["models"]:
+            for m in groq_info["models"][:25]:
+                has_any = True
+                is_active = (m["id"] == current and mode == "online")
+                status = "[bold green]● Active[/bold green]" if is_active else "[green]✓ Online[/green]"
+                if m.get("usable_for_chat", True):
+                    tools_str = "[green]✓ Yes[/green]"
+                else:
+                    tools_str = f"[dim]No ({m.get('category', 'specialized')})[/dim]"
+                desc = m.get("desc") or m.get("owned_by", "groq")
+                tbl.add_row("Groq", m["id"], tools_str, desc, status)
+
+        if has_any:
+            ctx.console.print(tbl)
+            ctx.console.print()
+
+        if not ollama_info["running"]:
+            ctx.console.print(
+                "[yellow]Ollama status:[/yellow] Server is not running. "
+                "Start with [bold]ollama serve[/bold] to use local offline models.\n"
+            )
+        if not groq_info["has_key"]:
+            ctx.console.print(
+                "[dim]Groq status: No API key. Set with /config api-key <key> for fast cloud models.[/dim]\n"
+            )
         return True
 
-    # Switch to named Ollama model (offline mode only for now)
+    # Switching to a specific model
+    explicit_groq = name.startswith("groq:")
+    explicit_ollama = name.startswith("ollama:")
+    clean_name = (
+        name[5:].strip() if explicit_groq
+        else name[7:].strip() if explicit_ollama
+        else name.strip()
+    )
+
+    # Detect provider automatically if not explicitly given
+    groq_models = groq_info.get("models", [])
+    groq_ids = {m["id"].lower(): m["id"] for m in groq_models}
+    ollama_models = ollama_info.get("models", [])
+    ollama_map = {m["name"].lower(): m for m in ollama_models}
+
+    # Match exact or prefix
+    matched_groq_id = None
+    if clean_name.lower() in groq_ids:
+        matched_groq_id = groq_ids[clean_name.lower()]
+    else:
+        for gid, real_id in groq_ids.items():
+            if gid.endswith(f"/{clean_name.lower()}") or gid == clean_name.lower():
+                matched_groq_id = real_id
+                break
+
+    matched_ollama = None
+    if clean_name.lower() in ollama_map:
+        matched_ollama = ollama_map[clean_name.lower()]
+    else:
+        for oname, oinfo in ollama_map.items():
+            if oname == clean_name.lower() or oname.startswith(f"{clean_name.lower()}:"):
+                matched_ollama = oinfo
+                break
+
+    # Decide whether target is Groq
+    target_is_groq = False
+    if explicit_groq:
+        target_is_groq = True
+    elif explicit_ollama:
+        target_is_groq = False
+    elif matched_groq_id and not matched_ollama:
+        target_is_groq = True
+    elif not matched_ollama and ("/" in clean_name and (groq_info.get("has_key") or ctx.agent.mode == "online")):
+        target_is_groq = True
+
+    if target_is_groq:
+        groq_model_name = matched_groq_id or clean_name
+
+        # Check if the model is a non-chat specialized model (whisper, guard, etc.)
+        for gm in groq_models:
+            if gm.get("id") == groq_model_name and not gm.get("usable_for_chat", True):
+                desc = gm.get("desc", "specialized model")
+                ctx.console.print(
+                    f"\n[bold red]Cannot switch:[/bold red] '{groq_model_name}' is a {desc} "
+                    "(not a conversational coding LLM).\n"
+                    "Please choose a chat/coding model such as [bold cyan]openai/gpt-oss-120b[/bold cyan] or [bold cyan]qwen/qwen3.8-27b[/bold cyan].\n"
+                )
+                return True
+
+        try:
+            from cliv.config import get_api_key
+            from cliv.llm import GroqBackend
+            api_key = getattr(ctx.agent, "api_key", None) or get_api_key()
+            if not api_key:
+                ctx.console.print(
+                    "[bold red]Cannot switch to Groq:[/bold red] No API key configured. "
+                    "Run [bold]/config api-key <key>[/bold] first."
+                )
+                return True
+
+            new_backend = GroqBackend(api_key, model=groq_model_name, stats=ctx.agent.stats)
+
+            # Probe model tool compatibility if agent has tool schemas
+            tool_schemas = getattr(ctx.agent, "_build_tool_schemas", lambda: None)()
+            if tool_schemas:
+                try:
+                    new_backend.probe_tool_calling(tool_schemas)
+                except Exception as probe_err:
+                    ctx.console.print(
+                        f"\n[bold red]Model rejected tool calling:[/bold red] {probe_err}\n"
+                        "This model cannot execute coding agent tools.\n"
+                    )
+                    return True
+
+            ctx.agent.backend = new_backend
+            ctx.agent.mode = "online"
+            ctx.console.print(
+                f"\n[bold green]Switched to Groq cloud model:[/bold green] [bold cyan]{groq_model_name}[/bold cyan]\n"
+            )
+            return True
+        except Exception as exc:
+            ctx.console.print(f"[bold red]Groq model switch failed:[/bold red] {exc}")
+            return True
+
+    # Target is Ollama
     try:
         from cliv.llm import OllamaBackend
-        from cliv.models import SessionStats
 
         if not OllamaBackend.is_available():
             ctx.console.print(
-                "[bold yellow]Cannot switch model: Ollama is not running.[/bold yellow]"
+                "[bold yellow]Cannot switch model: Ollama library is not installed.[/bold yellow] "
+                "Run `pip install ollama`."
             )
             return True
 
-        new_backend = OllamaBackend(name, stats=ctx.agent.stats)
+        if not is_ollama_running():
+            ctx.console.print(
+                "[bold red]Cannot switch model: Ollama daemon is not running.[/bold red] "
+                "Start it with: [bold]ollama serve[/bold]"
+            )
+            return True
+
+        # Check local models to ensure target model actually exists
+        ollama_model_name = matched_ollama["name"] if matched_ollama else clean_name
+        if not matched_ollama and ollama_models:
+            avail = ", ".join(f"'{m['name']}'" for m in ollama_models)
+            ctx.console.print(
+                f"\n[bold red]Cannot switch:[/bold red] Model '[bold]{clean_name}[/bold]' is not downloaded in Ollama.\n"
+                f"• Download it in your terminal with: [bold cyan]ollama pull {clean_name}[/bold cyan]\n"
+                f"• Or choose from currently available local models: {avail}\n"
+            )
+            return True
+
+        new_backend = OllamaBackend(ollama_model_name, stats=ctx.agent.stats)
         ctx.agent.backend = new_backend
-        ctx.agent.local_model = name
+        ctx.agent.local_model = ollama_model_name
         ctx.agent.mode = "offline"
+
+        tool_cap = ""
+        if matched_ollama:
+            if matched_ollama.get("supports_tools"):
+                tool_cap = " (direct tool calling supported)"
+            else:
+                tool_cap = " (intent routing fallback only)"
+
         ctx.console.print(
-            f"[bold green]Switched to model:[/bold green] [bold]{name}[/bold]"
+            f"\n[bold green]Switched to offline model:[/bold green] [bold cyan]{ollama_model_name}[/bold cyan]{tool_cap}\n"
         )
     except Exception as exc:  # noqa: BLE001
         ctx.console.print(f"[bold red]Model switch failed:[/bold red] {exc}")
@@ -956,6 +1129,100 @@ def handle_memory(ctx: SlashContext, args: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# /workspace  /ws
+# ---------------------------------------------------------------------------
+
+def handle_workspace(ctx: SlashContext, args: str) -> bool:
+    """Manage registered multi-repo workspaces."""
+    from cliv.workspace import WorkspaceRegistry
+
+    registry = getattr(ctx.agent, "workspace_registry", None) or WorkspaceRegistry()
+
+    parts = args.strip().split(None, 2)
+    subcmd = parts[0].lower() if parts else "list"
+    rest = parts[1] if len(parts) > 1 else ""
+    extra = parts[2] if len(parts) > 2 else ""
+
+    if subcmd in ("list", "ls", ""):
+        entries = registry.list()
+        if not entries:
+            ctx.console.print(
+                "\n[dim]No workspaces registered.[/dim]\n"
+                "Add one with: [bold]/workspace add <path> [name][/bold]\n"
+            )
+            return True
+        active = registry.active_entry()
+        from rich.table import Table
+        tbl = Table(title="Registered Workspaces", box=None, padding=(0, 2))
+        tbl.add_column("Status", style="green", no_wrap=True)
+        tbl.add_column("Name", style="bold cyan", no_wrap=True)
+        tbl.add_column("Path", style="dim")
+        tbl.add_column("Description")
+        for e in entries:
+            marker = " [ACTIVE]" if (active and e.name == active.name) else ""
+            status = "✓" if e.exists() else "[red]✗ MISSING[/red]"
+            tbl.add_row(status, e.name + marker, e.path, e.description or "")
+        ctx.console.print()
+        ctx.console.print(tbl)
+        ctx.console.print()
+        return True
+
+    if subcmd == "add":
+        path = rest.strip()
+        name = extra.strip() or None
+        if not path:
+            ctx.console.print("[yellow]Usage: /workspace add <path> [name][/yellow]")
+            return True
+        try:
+            entry, is_new = registry.add(path, name=name)
+            verb = "Registered" if is_new else "Updated"
+            ctx.console.print(
+                f"\n[bold green]{verb} workspace:[/bold green] "
+                f"[bold cyan]{entry.name}[/bold cyan] → {entry.path}\n"
+            )
+        except ValueError as exc:
+            ctx.console.print(f"[bold red]Error:[/bold red] {exc}")
+        return True
+
+    if subcmd in ("remove", "rm", "delete"):
+        name = rest.strip()
+        if not name:
+            ctx.console.print("[yellow]Usage: /workspace remove <name>[/yellow]")
+            return True
+        removed = registry.remove(name)
+        if removed:
+            ctx.console.print(f"\n[bold green]Removed workspace:[/bold green] [cyan]{name}[/cyan]\n")
+        else:
+            ctx.console.print(f"[yellow]No workspace named '{name}'.[/yellow]")
+        return True
+
+    if subcmd == "info":
+        name = rest.strip()
+        if not name:
+            ctx.console.print("[yellow]Usage: /workspace info <name>[/yellow]")
+            return True
+        entry = registry.get(name)
+        if entry is None:
+            ctx.console.print(f"[yellow]No workspace named '{name}'.[/yellow]")
+            return True
+        status = "✓ exists" if entry.exists() else "✗ MISSING"
+        ctx.console.print(f"\n[bold cyan]{entry.name}[/bold cyan]")
+        ctx.console.print(f"  Path:        {entry.path} ({status})")
+        ctx.console.print(f"  Description: {entry.description or '(none)'}")
+        ctx.console.print(f"  Tags:        {', '.join(entry.tags) or '(none)'}")
+        ctx.console.print(f"  Added:       {entry.added_at}")
+        ctx.console.print(f"  Last active: {entry.last_active}")
+        ctx.console.print()
+        return True
+
+    ctx.console.print(
+        f"[yellow]Unknown /workspace subcommand: '{subcmd}'.[/yellow] "
+        "Use: list, add, remove, info"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # /exit  /quit
 # ---------------------------------------------------------------------------
 
@@ -991,6 +1258,8 @@ SLASH_COMMANDS: Dict[str, Tuple[Handler, str]] = {
     "/export":      (handle_export,      "Export session to Markdown or JSON"),
     "/import":      (handle_import,      "Import a past session into active context"),
     "/sessions":    (handle_sessions,    "List archived conversation sessions"),
+    "/workspace":   (handle_workspace,   "Manage multi-repo workspaces (list, add, remove, info)"),
+    "/ws":          (handle_workspace,   "Alias for /workspace"),
     "/exit":        (handle_exit,        "Exit the session"),
     "/quit":        (handle_exit,        "Exit the session"),
 }

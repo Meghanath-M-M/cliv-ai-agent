@@ -61,6 +61,21 @@ class OllamaBackend(LLMBackend):
             return False
         return True
 
+    @classmethod
+    def is_running(cls, host: Optional[str] = None) -> bool:
+        """Check if Ollama server daemon is actively accepting requests."""
+        import socket
+        raw_host = host or "127.0.0.1:11434"
+        if "://" in raw_host:
+            raw_host = raw_host.split("://", 1)[1]
+        host_ip = raw_host.split(":", 1)[0]
+        port = int(raw_host.split(":", 1)[1]) if ":" in raw_host else 11434
+        try:
+            with socket.create_connection((host_ip, port), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
     def _extract_message(self, response: Any) -> Tuple[str, List[ToolCall]]:
         message = _get_attr(response, "message", None)
         if message is None:

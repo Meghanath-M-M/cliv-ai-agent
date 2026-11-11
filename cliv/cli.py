@@ -13,6 +13,7 @@ from cliv.config import get_api_key, save_api_key
 from cliv.guardian import ALL_PERMISSIONS, SecurityGuardian, SecurityPolicy
 from cliv.ui import ConsoleUI, render_cost_dashboard
 from cliv.slash import SlashContext, dispatch as slash_dispatch
+from cliv.workspace import WorkspaceRegistry
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -133,8 +134,20 @@ def build_agent(args, security_guardian=None, timeline_store=None, snapshot_stor
     console.print(f"Mode: [bold {mode_color}]{agent.mode.upper()}[/bold {mode_color}]")
     backend = getattr(agent, "backend", None)
     model_name = getattr(backend, "model", None)
-    if model_name:
-        console.print(f"Model: [bold]{model_name}[/bold]")
+    if backend is None:
+        console.print("[bold red]Model: None (No LLM backend available)[/bold red]")
+        console.print(
+            "[yellow]Notice:[/yellow] Neither Groq API key nor local Ollama backend is active.\n"
+            "  • Online: run [bold]cliv config api-key[/bold] (free key at console.groq.com)\n"
+            "  • Offline: run [bold]ollama serve[/bold] and [bold]ollama pull llama3.1:8b[/bold]\n"
+            "  • Commands like [bold]/dna[/bold], [bold]/graph[/bold], [bold]/timeline[/bold] remain fully functional."
+        )
+    elif model_name:
+        tier = "direct tool calling" if getattr(agent, "use_offline_tools", True) else "intent fallback"
+        if agent.mode == "offline":
+            console.print(f"Model: [bold]{model_name}[/bold] [dim]({tier})[/dim]")
+        else:
+            console.print(f"Model: [bold]{model_name}[/bold]")
     for notice in getattr(agent, "model_notices", []):
         console.print(f"[bold yellow]Model notice:[/bold yellow] {notice}")
     if args.yes:
@@ -516,15 +529,72 @@ def cmd_session(args):
 
 
 def cmd_models(args):
-    """List available models."""
-    from cliv.llm.router import list_groq_models
+    """List available online and offline models and their capabilities."""
+    from rich.table import Table
+    from cliv.llm.discovery import check_model_health, RECOMMENDED_OFFLINE_MODELS
 
-    try:
-        models = list_groq_models()
-        for m in models[:20]:
-            console.print(f"  {m['id']}  ({m.get('owned_by', 'unknown')})")
-    except Exception as exc:
-        console.print(f"[bold red]Models failed:[/bold red] {exc}")
+    health = check_model_health()
+    groq_info = health["groq"]
+    ollama_info = health["ollama"]
+
+    tbl = Table(title="Available AI Models", box=None, padding=(0, 2))
+    tbl.add_column("Provider", style="bold cyan", no_wrap=True)
+    tbl.add_column("Model Name / ID", style="bold", no_wrap=True)
+    tbl.add_column("Tool Support", no_wrap=True)
+    tbl.add_column("Size / Spec", style="dim")
+    tbl.add_column("Status")
+
+    has_any = False
+
+    # 1. Ollama local models
+    if ollama_info["models"]:
+        for m in ollama_info["models"]:
+            has_any = True
+            tools_str = "[green]✓ Tools[/green]" if m.get("supports_tools") else "[yellow]Intent only[/yellow]"
+            spec = f"{m.get('parameter_size') or '?'} ({m.get('size_gb', 0)} GB)"
+            status = "[bold green]✓ Downloaded[/bold green]"
+            tbl.add_row("Ollama (Local)", m["name"], tools_str, spec, status)
+
+    # 2. Groq cloud models
+    if groq_info["models"]:
+        for m in groq_info["models"][:25]:
+            has_any = True
+            if m.get("usable_for_chat"):
+                tools_str = "[green]✓ Tools[/green]"
+            else:
+                tools_str = f"[dim]No ({m.get('category', 'specialized')})[/dim]"
+            status = "[green]✓ Available[/green]" if m.get("active") else "[dim]Inactive[/dim]"
+            desc = m.get("desc") or m.get("owned_by", "groq")
+            tbl.add_row("Groq (Cloud)", m["id"], tools_str, desc, status)
+
+    console.print()
+    if has_any:
+        console.print(tbl)
+    else:
+        console.print("[yellow]No models currently ready to use.[/yellow]")
+    console.print()
+
+    # Diagnostics & recommendations
+    if not ollama_info["running"]:
+        console.print(
+            "[bold yellow]Ollama (Local):[/bold yellow] Daemon not reachable.\n"
+            "  Start Ollama: [bold]ollama serve[/bold]\n"
+            "  Recommended models: [cyan]ollama pull llama3.1:8b[/cyan] or [cyan]ollama pull qwen2.5-coder:7b[/cyan]\n"
+        )
+    elif not ollama_info["models"]:
+        console.print(
+            "[bold yellow]Ollama is running, but no models downloaded.[/bold yellow]\n"
+            "  Recommended: [bold cyan]ollama pull llama3.1:8b[/bold cyan] (tool calling supported)\n"
+            "  Lightweight: [bold cyan]ollama pull qwen2.5-coder:3b[/bold cyan]\n"
+        )
+
+    if not groq_info["has_key"]:
+        console.print(
+            "[dim]Groq (Cloud): No API key configured. Run 'cliv config api-key' to enable fast cloud models.[/dim]\n"
+        )
+    elif groq_info.get("error"):
+        console.print(f"[dim]Groq status: {groq_info['error']}[/dim]\n")
+
 
 
 def cmd_cost(args):
@@ -718,6 +788,78 @@ def cmd_memory(args):
 def cmd_upgrade(args):
     """Self-upgrade."""
     console.print("[dim]Upgrade not yet implemented[/dim]")
+
+
+def cmd_workspace(args):
+    """Manage multi-repo workspaces."""
+    from rich.table import Table
+
+    registry = WorkspaceRegistry()
+    subcmd = getattr(args, "workspace_command", None) or "list"
+
+    if subcmd == "list":
+        entries = registry.list()
+        if not entries:
+            console.print(
+                "\n[dim]No workspaces registered.[/dim]\n"
+                "Add one with: [bold]cliv workspace add <path>[/bold]\n"
+            )
+            return
+        active = registry.active_entry()
+        tbl = Table(title="Registered Workspaces", box=None, padding=(0, 2))
+        tbl.add_column("Status", style="green", no_wrap=True)
+        tbl.add_column("Name", style="bold cyan", no_wrap=True)
+        tbl.add_column("Path", style="dim")
+        tbl.add_column("Description")
+        for e in entries:
+            marker = " [ACTIVE]" if (active and e.name == active.name) else ""
+            status = "✓" if e.exists() else "[red]✗ MISSING[/red]"
+            tbl.add_row(status, e.name + marker, e.path, e.description or "")
+        console.print()
+        console.print(tbl)
+        console.print()
+
+    elif subcmd == "add":
+        path = getattr(args, "path", "").strip()
+        name = getattr(args, "name", None)
+        desc = getattr(args, "desc", "") or ""
+        tags = getattr(args, "tag", []) or []
+        try:
+            entry, is_new = registry.add(path, name=name, description=desc, tags=tags)
+            verb = "Registered" if is_new else "Updated"
+            console.print(
+                f"\n[bold green]{verb} workspace:[/bold green] "
+                f"[bold cyan]{entry.name}[/bold cyan] → {entry.path}\n"
+            )
+        except ValueError as exc:
+            console.print(f"[bold red]Error:[/bold red] {exc}")
+
+    elif subcmd in ("remove", "rm"):
+        name = getattr(args, "name", "").strip()
+        removed = registry.remove(name)
+        if removed:
+            console.print(f"\n[bold green]Removed workspace:[/bold green] [cyan]{name}[/cyan]\n")
+        else:
+            console.print(f"[yellow]No workspace named '{name}'.[/yellow]")
+
+    elif subcmd == "info":
+        name = getattr(args, "name", "").strip()
+        entry = registry.get(name)
+        if entry is None:
+            console.print(f"[yellow]No workspace named '{name}'.[/yellow]")
+            return
+        status = "✓ exists" if entry.exists() else "✗ MISSING"
+        console.print(f"\n[bold cyan]{entry.name}[/bold cyan]")
+        console.print(f"  Path:        {entry.path} ({status})")
+        console.print(f"  Description: {entry.description or '(none)'}")
+        console.print(f"  Tags:        {', '.join(entry.tags) or '(none)'}")
+        console.print(f"  Added:       {entry.added_at}")
+        console.print(f"  Last active: {entry.last_active}")
+        console.print()
+
+    else:
+        console.print(f"[yellow]Unknown workspace subcommand: '{subcmd}'.[/yellow]")
+
 
 
 # ============================================================
@@ -973,6 +1115,26 @@ def main():
     p_upgrade.add_argument("-h", "--help", action="store_true")
     p_upgrade.set_defaults(func=cmd_upgrade)
 
+    # workspace
+    p_ws = subparsers.add_parser("workspace", aliases=["ws"], help="Multi-repo workspace management", add_help=False)
+    p_ws.add_argument("-h", "--help", action="store_true")
+    ws_sub = p_ws.add_subparsers(dest="workspace_command", required=False)
+    p_ws_list = ws_sub.add_parser("list", help="List registered workspaces", add_help=False)
+    p_ws_list.add_argument("-h", "--help", action="store_true")
+    p_ws_add = ws_sub.add_parser("add", help="Register a new workspace", add_help=False)
+    p_ws_add.add_argument("-h", "--help", action="store_true")
+    p_ws_add.add_argument("path", help="Path to the workspace root directory")
+    p_ws_add.add_argument("name", nargs="?", default=None, help="Optional workspace name (default: directory name)")
+    p_ws_add.add_argument("--desc", metavar="TEXT", default="", help="Short description")
+    p_ws_add.add_argument("--tag", metavar="TAG", action="append", default=[], help="Tag (repeatable)")
+    p_ws_rm = ws_sub.add_parser("remove", aliases=["rm"], help="Unregister a workspace", add_help=False)
+    p_ws_rm.add_argument("-h", "--help", action="store_true")
+    p_ws_rm.add_argument("name", help="Workspace name to remove")
+    p_ws_info = ws_sub.add_parser("info", help="Show details about a workspace", add_help=False)
+    p_ws_info.add_argument("-h", "--help", action="store_true")
+    p_ws_info.add_argument("name", help="Workspace name")
+    p_ws.set_defaults(func=cmd_workspace, workspace_command="list")
+
     # Check sys.argv directly for legacy flags BEFORE argparse
     argv = sys.argv[1:]
     
@@ -1008,6 +1170,7 @@ def main():
         print("  models       List available models")
         print("  cost         Token usage and spend metrics for this project")
         print("  upgrade      Upgrade cliv")
+        print("  workspace    Multi-repo workspace management (list, add, remove, info)")
         print("\nGlobal options:")
         print("  --api-key, --offline, --verbose, --yes, --dry-run, --legacy-offline")
         print("  --permissions, --branch, --auto-commit")

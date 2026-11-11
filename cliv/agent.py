@@ -138,6 +138,13 @@ class AIAgent:
         from cliv.memory import MemoryStore
         self.memory = memory_store or MemoryStore()
 
+        from cliv.workspace import WorkspaceRegistry
+        self.workspace_registry = WorkspaceRegistry()
+        try:
+            self.workspace_registry.auto_register_current()
+        except Exception:
+            pass  # Non-fatal if project root cannot be determined
+
         self.stats = SessionStats()
         self._internet_check = internet_check or self._check_internet
         self.history = history_store or HistoryStore(
@@ -321,6 +328,35 @@ class AIAgent:
                 "installed, so no backend remains."
             )
         self.mode = "offline"
+
+    def _can_fallback_to_offline(self) -> bool:
+        """Check if local Ollama backend is available to take over from online."""
+        if self.mode != "online":
+            return False
+        try:
+            return OllamaBackend.is_available()
+        except Exception:
+            return False
+
+    def _fallback_to_offline(self, reason: str = "") -> bool:
+        """Switch active backend from online to offline with user notice."""
+        try:
+            self.backend = OllamaBackend(self.local_model, stats=self.stats)
+            self.mode = "offline"
+            reason_msg = f": {reason}" if reason else ""
+            self.ui.print(
+                f"[bold yellow]Online connection interrupted{reason_msg}.[/bold yellow]\n"
+                f"[bold cyan]Gracefully falling back to local Ollama model '{self.local_model}'...[/bold cyan]"
+            )
+            self._timeline_event(
+                "model_fallback",
+                f"Fell back to local {self.local_model}",
+                {"reason": reason, "model": self.local_model},
+            )
+            return True
+        except Exception as exc:
+            logging.error("Failed to fallback to Ollama: %s", exc)
+            return False
 
     def _load_tools(self) -> Dict[str, BaseTool]:
         return load_tools(project=project_root())
@@ -856,6 +892,7 @@ class AIAgent:
                 "15. SECURITY GUARDIAN: Some tool calls may be blocked by the active permission policy. Do not attempt to bypass a block. Explain the block to the user and suggest changing permissions only if they explicitly ask.\n"
                 "16. SEMANTIC SEARCH PROTOCOL: When searching for code, concepts, patterns, or functionality where the exact filename or symbol is unknown (e.g. 'where is authentication handled?', 'show me database retry logic'), call `rag_query` for semantic search. Use `search_codebase` for literal string or regex pattern matches.\n"
                 "17. LONG-TERM MEMORY PROTOCOL: When the user asks you to remember a preference, coding convention, architectural rule, or project standard (e.g. 'remember that I prefer pytest fixtures', 'remember that auth is in v2/'), call the `remember` tool to persist it across sessions. When asked what you remember or about past conventions, call the `recall` tool.\n"
+                "18. MULTI-REPO PROTOCOL: When asked about code in another repo, service, or package, first call `list_workspaces` to discover registered repos, then use `read_workspace_file`, `list_workspace_files`, or `search_workspace` to access cross-repo code. Never guess about another repo's contents.\n"
                 f"\nAvailable tools:\n{tool_list}"
                 f"{memory_section}"
             ),
@@ -907,11 +944,21 @@ class AIAgent:
             except BackendError as exc:
                 if self.mode == "offline":
                     raise OfflineFallback(str(exc)) from exc
+                if not self._internet_check() and self._can_fallback_to_offline():
+                    if self._fallback_to_offline(reason=str(exc)):
+                        if not self.use_offline_tools or self.backend is None:
+                            return self._finish_offline(self.messages[-1].get("content", ""))
+                        continue
                 return f"Error [ONLINE Mode]: {exc}"
             except Exception as exc:  # noqa: BLE001
                 logging.exception("Unexpected LLM failure")
                 if self.mode == "offline":
                     raise OfflineFallback(str(exc)) from exc
+                if not self._internet_check() and self._can_fallback_to_offline():
+                    if self._fallback_to_offline(reason=str(exc)):
+                        if not self.use_offline_tools or self.backend is None:
+                            return self._finish_offline(self.messages[-1].get("content", ""))
+                        continue
                 return f"Error [ONLINE Mode]: {exc}"
 
             if not content and not tool_calls:
@@ -1183,9 +1230,18 @@ class AIAgent:
                 return self._run_tool_loop()
             except ToolCallingUnsupported as exc:
                 logging.warning("Falling back to intent routing: %s", exc)
+                if hasattr(self, "ui") and self.ui and hasattr(self.ui, "print"):
+                    self.ui.print(
+                        f"[dim]Model '{self.local_model}' does not support direct tool calling. "
+                        "Using intent-based offline assistant.[/dim]"
+                    )
                 return self._finish_offline(user_input)
             except OfflineFallback as exc:
                 logging.warning("Falling back to intent routing: %s", exc)
+                if hasattr(self, "ui") and self.ui and hasattr(self.ui, "print"):
+                    self.ui.print(
+                        f"[dim]Tool loop paused ({exc}). Falling back to intent routing.[/dim]"
+                    )
                 return self._finish_offline(user_input)
 
         try:
