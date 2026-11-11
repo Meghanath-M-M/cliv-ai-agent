@@ -348,3 +348,26 @@ def test_cmd_tools_list_and_new(monkeypatch, tmp_path):
     info_out = test_console.export_text()
     assert "Tool: read_file" in info_out
     assert "Input Schema:" in info_out
+
+
+def test_cli_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert out.strip().startswith("cliv ")
+    assert "1.0.0" in out
+
+
+def test_cli_short_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["-V"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert out.strip() == f"cliv {cli.__version__}"
+
+
+def test_cli_version_metadata():
+    import re
+    assert re.match(r"^\d+\.\d+\.\d+", cli.__version__)
+

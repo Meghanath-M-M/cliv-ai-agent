@@ -3,11 +3,20 @@ Terminal UI for cliv.
 Handles startup flow, routing, real output, and session management.
 """
 
-import sys
 import argparse
+import importlib.metadata
 import re
 import socket
+import sys
 from getpass import getpass
+
+try:
+    __version__ = importlib.metadata.version("cliv-ai")
+except Exception:
+    try:
+        __version__ = importlib.metadata.version("cliv")
+    except Exception:
+        __version__ = "1.0.0"
 from cliv.agent import AIAgent
 from cliv.config import get_api_key, save_api_key
 from cliv.guardian import ALL_PERMISSIONS, SecurityGuardian, SecurityPolicy
@@ -1185,12 +1194,21 @@ def cmd_workspace(args):
 # ============================================================
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="cliv",
         description="> cliv_ : Terminal-native intelligence for your local codebase.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
+    )
+
+    # Version flag
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show version number and exit",
     )
 
     # Global flags
@@ -1274,6 +1292,13 @@ def main():
         "run", help="Interactive chat or single-shot (default)", add_help=False
     )
     p_run.add_argument("-h", "--help", action="store_true")
+    p_run.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"cliv {__version__}",
+        help="Show version number and exit",
+    )
     p_run.add_argument(
         "--json", action="store_true", help="Output machine-readable JSON"
     )
@@ -1646,7 +1671,13 @@ def main():
     p_ws.set_defaults(func=cmd_workspace, workspace_command="list")
 
     # Check sys.argv directly for legacy flags BEFORE argparse
-    argv = sys.argv[1:]
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Check for version first
+    if "--version" in argv or "-V" in argv:
+        print(f"cliv {__version__}")
+        sys.exit(0)
 
     # Check for legacy flags that should bypass subcommand parsing
     # These are the OLD flat flags that were replaced by subcommands
@@ -1684,6 +1715,8 @@ def main():
         parser.print_help()
         print("\nCommands:")
         print("  run          Interactive chat or single-shot (default)")
+        print("  onboard      Generate developer onboarding guide")
+        print("  review       Automated code review & security check")
         print("  dna          Project DNA architecture report")
         print("  graph        Visual codebase explorer")
         print("  rag          RAG semantic memory (index, query, stats)")
@@ -1699,8 +1732,8 @@ def main():
             "  workspace    Multi-repo workspace management (list, add, remove, info)"
         )
         print("\nGlobal options:")
-        print("  --api-key, --offline, --verbose, --yes, --dry-run, --legacy-offline")
-        print("  --permissions, --branch, --auto-commit")
+        print("  --version, -V, --api-key, --offline, --verbose, --yes, --dry-run, --legacy-offline")
+        print("  --permissions, --branch, --auto-commit, --json, --quiet")
         sys.exit(0)
 
     # Handle legacy flags directly (they don't need subcommand parsing)
@@ -1817,6 +1850,9 @@ def main():
         "--auto-commit", action="store_true", help=argparse.SUPPRESS
     )
     global_parser.add_argument("--resume", metavar="SESSION", help=argparse.SUPPRESS)
+    global_parser.add_argument(
+        "--version", "-V", action="store_true", help=argparse.SUPPRESS
+    )
     global_parser.add_argument(
         "-h", "--help", action="store_true", help=argparse.SUPPRESS
     )

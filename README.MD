@@ -66,7 +66,13 @@ A high-performance, privacy-first terminal AI coding assistant that reads, edits
 
 ### 1. Installation
 
-Clone and install dependencies:
+Install via PyPI:
+
+```bash
+pip install cliv-ai
+```
+
+Or install from source:
 
 ```bash
 git clone https://github.com/Meghanath-M-M/cliv-ai-agent.git
@@ -77,6 +83,13 @@ uv sync --extra all
 
 # Or install with pip
 pip install -e ".[all]"
+```
+
+Verify installation:
+
+```bash
+cliv --version
+# Output: cliv 1.0.0
 ```
 
 *Install extras: `[online]` (Groq), `[offline]` (Ollama + NumPy), `[all]` (both), or `[dev]` (testing suite).*
@@ -133,6 +146,7 @@ cliv [OPTIONS] <COMMAND> [ARGS]...
 
 ### Key Flags & Automation Modes
 
+* `--version`, `-V` — Show installed cliv version (`cliv --version`).
 * `--json` — Machine-readable JSON output on single-shot turns and all subcommands:
   ```bash
   cliv --json "list files in cliv/tools"

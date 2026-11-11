@@ -3,25 +3,34 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cliv"
+name = "cliv-ai"
 version = "1.0.0"
-description = "Terminal-native intelligence for your local codebase"
+description = "Terminal-native AI coding agent with time-travel undo, security guardian, and project onboarding"
 readme = "README.MD"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 authors = [
     {name = "Meghanath M M"},
 ]
-keywords = ["ai", "agent", "cli", "coding", "llm", "groq", "ollama"]
+keywords = [
+    "ai", "agent", "cli", "coding", "llm", "groq", "ollama",
+    "terminal", "security", "rag", "mcp", "code-analysis",
+    "developer-tools", "code-review", "automation"
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Terminals",
     "Topic :: Utilities",
 ]
 dependencies = [
@@ -46,6 +55,14 @@ cliv = "cliv.cli:main"
 Homepage = "https://github.com/Meghanath-M-M/cliv-ai-agent"
 Repository = "https://github.com/Meghanath-M-M/cliv-ai-agent"
 Issues = "https://github.com/Meghanath-M-M/cliv-ai-agent/issues"
+Documentation = "https://github.com/Meghanath-M-M/cliv-ai-agent#readme"
+
+[tool.hatch.build]
+include = [
+    "cliv/**",
+    "README.MD",
+    "LICENSE",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
