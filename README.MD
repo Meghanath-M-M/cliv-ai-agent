@@ -6,7 +6,7 @@ A high-performance, privacy-first terminal AI coding assistant that reads, edits
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI Tests](https://img.shields.io/badge/tests-436%20passed-brightgreen.svg)](https://github.com/Meghanath-M-M/ai-cli-assistant)
+[![CI Tests](https://img.shields.io/badge/tests-436%20passed-brightgreen.svg)](https://github.com/Meghanath-M-M/cliv-ai-agent)
 [![Powered by Groq](https://img.shields.io/badge/Cloud-Groq%20LPU-orange)](https://console.groq.com/)
 [![Local Ollama](https://img.shields.io/badge/Local-Ollama-green)](https://ollama.com/)
 
@@ -55,8 +55,8 @@ A high-performance, privacy-first terminal AI coding assistant that reads, edits
 Clone and install dependencies:
 
 ```bash
-git clone https://github.com/Meghanath-M-M/ai-cli-assistant.git
-cd ai-cli-assistant
+git clone https://github.com/Meghanath-M-M/cliv-ai-agent.git
+cd cliv-ai-agent
 
 # Install using uv (recommended for speed)
 uv sync --extra all

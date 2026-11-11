@@ -43,9 +43,9 @@ dev = [
 cliv = "cliv.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Meghanath-M-M/ai-cli-assistant"
-Repository = "https://github.com/Meghanath-M-M/ai-cli-assistant"
-Issues = "https://github.com/Meghanath-M-M/ai-cli-assistant/issues"
+Homepage = "https://github.com/Meghanath-M-M/cliv-ai-agent"
+Repository = "https://github.com/Meghanath-M-M/cliv-ai-agent"
+Issues = "https://github.com/Meghanath-M-M/cliv-ai-agent/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
