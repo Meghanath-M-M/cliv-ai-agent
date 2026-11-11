@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from cliv.diff_view import render_preview
+from cliv.models import SessionStats
 
 
 class UI(Protocol):
@@ -101,3 +102,31 @@ class ConsoleUI:
             return response in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             return False
+
+
+def render_cost_dashboard(
+    console: Console,
+    stats: SessionStats,
+    *,
+    model_name: Optional[str] = None,
+    mode: Optional[str] = None,
+) -> None:
+    """Print a real-time token/cost/speed dashboard line.
+
+    Kept to a single compact line so it stays readable after every turn
+    without flooding the terminal.
+    """
+
+    parts: list[str] = []
+    if mode:
+        parts.append(f"Mode: [bold]{mode.upper()}[/bold]")
+    if model_name:
+        parts.append(f"Model: [bold]{model_name}[/bold]")
+    parts.append(
+        f"Tokens: [cyan]{stats.total_tokens:,}[/cyan] "
+        f"(in [green]{stats.input_tokens:,}[/green], "
+        f"out [green]{stats.output_tokens:,}[/green])"
+    )
+    parts.append(f"Cost: [bold magenta]${stats.cost_usd:.6f}[/bold magenta]")
+    console.print(" · ".join(parts))
+

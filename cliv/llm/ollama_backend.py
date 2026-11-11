@@ -104,6 +104,7 @@ class OllamaBackend(LLMBackend):
 
         try:
             response = self._client.chat(**kwargs)
+            self._record_usage(response)
         except Exception as exc:  # noqa: BLE001 - provider errors vary
             message = str(exc).lower()
             if "tool" in message and (
@@ -117,12 +118,21 @@ class OllamaBackend(LLMBackend):
 
         return self._extract_message(response)
 
+    def _record_usage(self, response: Any) -> None:
+        if not self.stats:
+            return
+        prompt_tokens = _get_attr(response, "prompt_eval_count", 0) or 0
+        completion_tokens = _get_attr(response, "eval_count", 0) or 0
+        if prompt_tokens or completion_tokens:
+            self.stats.add_usage(prompt_tokens, completion_tokens, self.model)
+
     def generate(self, messages: List[Dict[str, Any]]) -> str:
         try:
             response = self._client.chat(
                 model=self.model,
                 messages=normalise_messages(messages, stringify_arguments=False),
             )
+            self._record_usage(response)
         except Exception as exc:  # noqa: BLE001
             logging.error("Ollama generation failed: %s", exc)
             raise BackendError(f"Ollama call failed: {exc}") from exc

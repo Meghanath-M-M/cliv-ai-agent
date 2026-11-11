@@ -72,6 +72,23 @@ def classify_intent(user_input: str) -> Tuple[str, Optional[str]]:
     if any(re.search(pattern, lowered) for pattern in self_heal_patterns):
         return ("self_heal", extracted_file)
 
+    # Undo / snapshot restore intent - must be checked BEFORE generic patterns
+    # so that bare "undo" is never mis-routed as a tool call or file operation.
+    undo_patterns = [
+        r"^\s*undo\s*$",
+        r"^\s*undo\s+[0-9]{8}t[0-9]{6}z-[a-f0-9]+\s*$",  # undo <snapshot_id>
+        r"\bundo\s+(?:last|that|it|this|change|the\s+last)\b",
+        r"\brevert\s+(?:last|that|it|this|change|the\s+last)\b",
+        r"\brestore\s+(?:last|that|the\s+last)\s+(?:snapshot|change|file|version)\b",
+        r"\broll\s*back\s+(?:last|that|the\s+last)\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in undo_patterns):
+        # target is an optional snapshot id (bare "undo" gets None → "last")
+        snapshot_id_match = re.search(
+            r"\b([0-9]{8}t[0-9]{6}z-[a-f0-9]+)\b", lowered
+        )
+        return ("undo", snapshot_id_match.group(1) if snapshot_id_match else None)
+
     if (
         re.search(
             r"(?:list|show|ls|display)\s+(?:all\s+)?(?:the\s+)?(?:files?|contents?|items?)",

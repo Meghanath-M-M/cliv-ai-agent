@@ -112,3 +112,10 @@ qdrant_data/
 CLAUDE.md
 
 */docs
+
+# cliv local runtime cache
+.cliv/rag/
+.cliv/*.tmp
+output.dot
+output.md
+test.md

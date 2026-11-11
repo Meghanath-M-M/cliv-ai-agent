@@ -2,7 +2,7 @@
 
 import json
 
-from cliv.history import HistoryStore, estimate_tokens, trim_messages
+from cliv.history import HistoryStore, _normalise_content, estimate_tokens, trim_messages
 
 
 def test_estimate_tokens_is_roughly_characters_over_four():
@@ -84,3 +84,49 @@ def test_history_file_stores_normalised_arguments(tmp_path):
     )
     loaded = HistoryStore(path).load()
     assert loaded[0]["tool_calls"][0]["function"]["arguments"] == {"path": "a.py"}
+
+
+# ---------------------------------------------------------------------------
+# Regression: list-typed content in history (the "undo" corruption bug)
+# ---------------------------------------------------------------------------
+
+def test_normalise_content_converts_list_to_string():
+    """List content (e.g. ``["undo"]``) must be coerced to a plain string."""
+    messages = [
+        {"role": "user", "content": ["undo"]},
+        {"role": "assistant", "content": "ok"},
+    ]
+    result = _normalise_content(messages)
+    assert result[0]["content"] == "undo"
+    assert result[1]["content"] == "ok"
+
+
+def test_normalise_content_handles_multi_item_list():
+    messages = [{"role": "user", "content": ["hello", "world"]}]
+    result = _normalise_content(messages)
+    assert result[0]["content"] == "hello world"
+
+
+def test_normalise_content_leaves_strings_unchanged():
+    messages = [{"role": "user", "content": "already a string"}]
+    result = _normalise_content(messages)
+    assert result[0]["content"] == "already a string"
+
+
+def test_load_normalises_list_content_on_disk(tmp_path):
+    """Corrupt history with list content is healed transparently on load."""
+    path = tmp_path / "history.json"
+    path.write_text(
+        json.dumps([{"role": "user", "content": ["undo"]}])
+    )
+    loaded = HistoryStore(path).load()
+    assert loaded[0]["content"] == "undo"
+
+
+def test_save_normalises_list_content_before_writing(tmp_path):
+    """Saving a message with list content must not persist the malformed form."""
+    path = tmp_path / "history.json"
+    store = HistoryStore(path)
+    store.save([{"role": "user", "content": ["undo"]}])
+    raw = json.loads(path.read_text())
+    assert raw[0]["content"] == "undo"

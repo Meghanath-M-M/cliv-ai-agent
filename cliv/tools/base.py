@@ -22,6 +22,8 @@ class BaseTool(ABC):
         {"read", "write", "execute", "network"}
     )
     risk_level: str = "high"
+    plugin_source: str = "builtin"  # "builtin", "user", or "project"
+    plugin_path: Optional[str] = None
 
     @abstractmethod
     def execute(self, **kwargs) -> str:

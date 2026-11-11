@@ -127,3 +127,83 @@ def test_read_timeline_tool_returns_recent_events(project_dir):
 
     assert "CLIV DEVELOPMENT TIMELINE" in result
     assert "Analyse this project" in result
+
+
+def test_timeline_records_and_aggregates_project_cost(tmp_path):
+    store = TimelineStore(tmp_path / "timeline.db")
+    proj = tmp_path / "my_project"
+    proj.mkdir()
+
+    # Session 1
+    assert store.record_usage(
+        "sess-1",
+        project=proj,
+        model="openai/gpt-oss-120b",
+        mode="online",
+        input_tokens=1000,
+        output_tokens=500,
+        total_tokens=1500,
+        cost_usd=0.00045,
+    )
+
+    # Session 2
+    assert store.record_usage(
+        "sess-2",
+        project=proj,
+        model="openai/gpt-oss-120b",
+        mode="online",
+        input_tokens=2000,
+        output_tokens=1000,
+        total_tokens=3000,
+        cost_usd=0.00090,
+    )
+
+    # Session 1 update (more turns in same session)
+    assert store.record_usage(
+        "sess-1",
+        project=proj,
+        model="openai/gpt-oss-120b",
+        mode="online",
+        input_tokens=1500,
+        output_tokens=700,
+        total_tokens=2200,
+        cost_usd=0.00065,
+    )
+
+    sess1 = store.get_session_cost("sess-1")
+    assert sess1 is not None
+    assert sess1["total_tokens"] == 2200
+    assert sess1["cost_usd"] == pytest.approx(0.00065)
+
+    proj_cost = store.get_project_cost(project=proj)
+    assert proj_cost["total_sessions"] == 2
+    assert proj_cost["input_tokens"] == 3500
+    assert proj_cost["output_tokens"] == 1700
+    assert proj_cost["total_tokens"] == 5200
+    assert proj_cost["total_cost_usd"] == pytest.approx(0.00155)
+    assert len(proj_cost["models"]) == 1
+    assert proj_cost["models"][0]["model"] == "openai/gpt-oss-120b"
+
+
+def test_agent_persists_cost_to_timeline(project_dir, tmp_path):
+    store = TimelineStore(tmp_path / "timeline.db")
+    backend = StubBackend()
+    backend.stats.add_usage(500, 200, "stub-model")
+
+    agent = AIAgent(
+        api_key=None,
+        ui=NullUI(approve=True),
+        history_store=HistoryStore(project_dir / "history.json"),
+        backend=backend,
+        mode="online",
+        auto_approve=True,
+        timeline_store=store,
+        internet_check=lambda: True,
+    )
+    # Turn execution
+    agent.chat("calculate something")
+
+    sess_cost = store.get_session_cost(agent.session_id)
+    assert sess_cost is not None
+    assert sess_cost["total_tokens"] == 700
+    assert sess_cost["cost_usd"] > 0.0

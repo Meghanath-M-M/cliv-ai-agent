@@ -36,6 +36,27 @@ def estimate_message_tokens(message: Dict[str, Any]) -> int:
     return total
 
 
+def _normalise_content(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ensure every message's ``content`` field is a string or None.
+
+    Older history files (or a bug in the interactive undo path) could persist
+    ``content`` as a list (e.g. ``["undo"]``).  Ollama / Pydantic rejects
+    list-typed content, so we coerce it here before anything else touches the
+    messages.
+    """
+
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            # Flatten: join any string items, ignore non-strings.
+            message["content"] = " ".join(
+                str(item) for item in content if item is not None
+            )
+        elif content is not None and not isinstance(content, str):
+            message["content"] = str(content)
+    return messages
+
+
 def _normalise_tool_arguments(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Make persisted tool arguments a dict again (older files used JSON strings)."""
 
@@ -135,6 +156,7 @@ class HistoryStore:
                 messages = json.load(handle)
             if not isinstance(messages, list):
                 return []
+            messages = _normalise_content(messages)
             return _normalise_tool_arguments(messages)
         except Exception as exc:  # noqa: BLE001 - corrupt history must not crash startup
             logging.error("Failed to load history: %s", exc)
@@ -143,8 +165,10 @@ class HistoryStore:
     def save(self, messages: List[Dict[str, Any]]) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Normalise before trimming so we never persist malformed content.
+            sanitised = _normalise_content(list(messages))
             trimmed = trim_messages(
-                messages,
+                sanitised,
                 max_tokens=None,
                 max_messages=self.max_messages,
             )
@@ -170,3 +194,10 @@ class HistoryStore:
                 self.path.unlink()
         except Exception as exc:  # noqa: BLE001
             logging.error("Failed to delete history file: %s", exc)
+
+    def list_sessions(
+        self, limit: int = 50, project: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
+        """List archived sessions sorted by most recent first."""
+        from cliv.session_io import list_archived_sessions
+        return list_archived_sessions(limit=limit, project=project)

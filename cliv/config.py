@@ -18,6 +18,9 @@ HISTORY_FILE = CONFIG_DIR / "history.json"
 LOG_FILE = CONFIG_DIR / "agent.log"
 TIMELINE_FILE = CONFIG_DIR / "timeline.db"
 SNAPSHOT_DIR = CONFIG_DIR / "snapshots"
+SESSIONS_DIR = CONFIG_DIR / "sessions"
+PLUGINS_DIR = CONFIG_DIR / "plugins"
+MEMORY_FILE = CONFIG_DIR / "memory.json"
 
 # The primary online model plus ordered fallbacks.  Availability and tool
 # compatibility are checked at startup, so a retired model does not break

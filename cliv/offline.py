@@ -32,6 +32,11 @@ class OfflineAssistant:
         if intent == "conversation":
             return self._generate(user_input, history=history)
 
+        if intent == "undo":
+            # Delegate to the agent's unified undo handler so we don't
+            # duplicate snapshot logic and history management here.
+            return self.agent._finish_undo(target)
+
         if intent == "project_analysis":
             with self.agent.ui.status(
                 "[dim]Building Project DNA...", spinner="dots"

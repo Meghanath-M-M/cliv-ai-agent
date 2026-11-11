@@ -87,6 +87,20 @@ class TimelineStore:
                 BEGIN
                     SELECT RAISE(ABORT, 'timeline is append-only');
                 END;
+                CREATE TABLE IF NOT EXISTS session_usage (
+                    session_id TEXT PRIMARY KEY,
+                    project_root TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL DEFAULT 0.0
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_project
+                    ON session_usage(project_root);
                 """
             )
 
@@ -204,6 +218,142 @@ class TimelineStore:
                 )
             )
         return events
+
+    def record_usage(
+        self,
+        session_id: str,
+        *,
+        project: Optional[Path] = None,
+        model: str = "",
+        mode: str = "online",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> bool:
+        """Update or insert session token usage and cost."""
+        if not session_id:
+            return False
+        try:
+            root = (project or project_root()).resolve()
+        except (OSError, RuntimeError):
+            root = Path.cwd().resolve()
+        now = _now()
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO session_usage
+                        (session_id, project_root, created_at, updated_at,
+                         model, mode, input_tokens, output_tokens, total_tokens, cost_usd)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        updated_at = excluded.updated_at,
+                        model = CASE WHEN excluded.model != '' THEN excluded.model ELSE session_usage.model END,
+                        mode = excluded.mode,
+                        input_tokens = excluded.input_tokens,
+                        output_tokens = excluded.output_tokens,
+                        total_tokens = excluded.total_tokens,
+                        cost_usd = excluded.cost_usd
+                    """,
+                    (
+                        session_id,
+                        str(root),
+                        now,
+                        now,
+                        model,
+                        mode,
+                        int(input_tokens),
+                        int(output_tokens),
+                        int(total_tokens),
+                        float(cost_usd),
+                    ),
+                )
+            return True
+        except Exception as exc:  # noqa: BLE001 - non-fatal
+            import logging
+            logging.warning("Failed to record usage in timeline: %s", exc)
+            return False
+
+    def get_project_cost(self, project: Optional[Path] = None) -> Dict[str, Any]:
+        """Aggregate token usage and cost across all sessions for a project."""
+        try:
+            root = (project or project_root()).resolve()
+        except (OSError, RuntimeError):
+            root = Path.cwd().resolve()
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*) as total_sessions,
+                        COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                        COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
+                    FROM session_usage
+                    WHERE project_root = ?
+                    """,
+                    (str(root),),
+                ).fetchone()
+
+                model_rows = connection.execute(
+                    """
+                    SELECT model, SUM(total_tokens) as tokens, SUM(cost_usd) as cost
+                    FROM session_usage
+                    WHERE project_root = ? AND model != ''
+                    GROUP BY model
+                    ORDER BY cost DESC
+                    """,
+                    (str(root),),
+                ).fetchall()
+
+                return {
+                    "project_root": str(root),
+                    "total_sessions": int(row["total_sessions"]),
+                    "input_tokens": int(row["total_input_tokens"]),
+                    "output_tokens": int(row["total_output_tokens"]),
+                    "total_tokens": int(row["total_tokens"]),
+                    "total_cost_usd": float(row["total_cost_usd"]),
+                    "models": [
+                        {
+                            "model": m["model"],
+                            "tokens": int(m["tokens"]),
+                            "cost": float(m["cost"]),
+                        }
+                        for m in model_rows
+                    ],
+                }
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.warning("Failed to get project cost: %s", exc)
+            return {
+                "project_root": str(root),
+                "total_sessions": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+                "models": [],
+            }
+
+    def get_session_cost(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve token and cost stats for a single session."""
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM session_usage WHERE session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return dict(row)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.warning("Failed to get session cost: %s", exc)
+            return None
 
 
 def render_timeline(
