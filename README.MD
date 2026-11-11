@@ -4,6 +4,7 @@
 
 A high-performance, privacy-first terminal AI coding assistant that reads, edits, reviews, tests, and debugs code across single and multi-repo projects. Built for speed, safety, and auditability, it leverages **Groq LPU cloud inference** for sub-second tool calling and **Ollama** for private local execution, featuring automatic network failover, time-travel safety snapshots, long-term memory, and GitHub Actions CI integration.
 
+![cliv demo](.github/demo.gif)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI Tests](https://img.shields.io/badge/tests-436%20passed-brightgreen.svg)](https://github.com/Meghanath-M-M/cliv-ai-agent)
