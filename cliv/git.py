@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
 # Subcommands considered safe to run automatically.  Destructive history
 # rewriting (reset, rebase, filter-branch, etc.) is deliberately excluded.
@@ -116,6 +116,17 @@ def status_short(*, cwd: Optional[str] = None) -> str:
     if result.returncode != 0:
         raise GitError(f"git status failed: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def recent_commits(limit: int = 5, *, cwd: Optional[str] = None) -> List[str]:
+    """Return the last *limit* commits as one-line summaries."""
+
+    if not is_git_repo(cwd=cwd):
+        return []
+    result = _run(["log", f"-{limit}", "--oneline"], cwd=cwd)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
 
 
 def add(paths: Sequence[str], *, cwd: Optional[str] = None) -> None:

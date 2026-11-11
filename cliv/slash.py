@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import types
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -93,6 +94,8 @@ def handle_help(ctx: SlashContext, args: str) -> bool:
         ("/timeline [n]",     "Show last N timeline events",         "/timeline 20"),
         ("/rag [query|index]", "Semantic code search & index",        "/rag query auth  or  /rag index"),
         ("/dna",              "Project DNA architecture report",      "/dna"),
+        ("/onboard [save]",   "Generate developer onboarding guide",  "/onboard  or  /onboard save"),
+        ("/review [base]",    "Automated code review & security check", "/review  or  /review main"),
         ("/graph",            "ASCII dependency graph",              "/graph"),
         ("/clear",            "Clear conversation history",          "/clear"),
         ("/history [n]",      "Show recent conversation turns",      "/history 5"),
@@ -107,6 +110,7 @@ def handle_help(ctx: SlashContext, args: str) -> bool:
         ("/import <path|id>", "Import a past session into context",  "/import session.json"),
         ("/sessions [n]",     "List archived conversation sessions", "/sessions 10"),
         ("/workspace",        "Manage multi-repo workspaces",        "/workspace add ../api  or  /workspace list"),
+        ("/json [on|off]",    "Toggle structured JSON response mode", "/json on  or  /json off"),
         ("/exit",             "Exit the session (also: quit)",       "/exit"),
     ]
     for cmd, desc, example in rows:
@@ -214,6 +218,75 @@ def handle_dna(ctx: SlashContext, args: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# /onboard
+# ---------------------------------------------------------------------------
+
+def handle_onboard(ctx: SlashContext, args: str) -> bool:
+    """Generate and display or save a project onboarding report."""
+    from cliv.onboarding import generate_onboarding_report
+
+    raw = (args or "").strip()
+    target_path = None
+    save = False
+
+    if raw:
+        if raw.lower() in {"save", "--save"}:
+            save = True
+        elif raw.lower() in {"json", "--json"}:
+            report = generate_onboarding_report()
+            ctx.console.print(json.dumps(report.to_dict(), indent=2))
+            return True
+        else:
+            save = True
+            target_path = raw
+
+    with ctx.console.status("[dim]Generating project onboarding report...[/dim]", spinner="dots"):
+        report = generate_onboarding_report()
+
+    if save:
+        saved_file = report.save(dest=target_path)
+        ctx.console.print(f"[bold green]Onboarding report saved to:[/bold green] {saved_file}")
+    else:
+        ctx.console.print()
+        ctx.console.print(Markdown(report.render_markdown()))
+        ctx.console.print("\n[dim]To save this report to a file, run: [bold]/onboard save[/bold][/dim]\n")
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# /review
+# ---------------------------------------------------------------------------
+
+def handle_review(ctx: SlashContext, args: str) -> bool:
+    """Run automated code review on modified files or against a base ref."""
+    from cliv.review import generate_github_workflow, run_code_review
+
+    raw = (args or "").strip()
+    if raw.lower() in {"init", "--init", "ci"}:
+        workflow_path = generate_github_workflow()
+        ctx.console.print(
+            f"\n[bold green]✓ GitHub Actions CI workflow created:[/bold green] {workflow_path}\n"
+        )
+        return True
+
+    if raw.lower() in {"json", "--json"}:
+        report = run_code_review()
+        ctx.console.print(json.dumps(report.to_dict(), indent=2))
+        return True
+
+    base_ref = raw if raw else None
+
+    with ctx.console.status("[dim]Running automated code review...[/dim]", spinner="dots"):
+        report = run_code_review(base_ref=base_ref)
+
+    ctx.console.print()
+    ctx.console.print(Markdown(report.render_markdown()))
+    ctx.console.print()
+    return True
+
+
+# ---------------------------------------------------------------------------
 # /graph
 # ---------------------------------------------------------------------------
 
@@ -300,7 +373,26 @@ def handle_model(ctx: SlashContext, args: str) -> bool:
     ollama_info = health.get("ollama", {})
     groq_info = health.get("groq", {})
 
-    if not name or name in ("list", "ls", "status"):
+    # If no argument is passed (or explicit interactive flag), open interactive TUI selector
+    if not name or name in ("-i", "--interactive", "select"):
+        if sys.stdin.isatty():
+            from cliv.tui import ModelSelector
+            selector = ModelSelector(
+                health_data=health,
+                current_model=current,
+                current_mode=mode,
+                console=ctx.console,
+            )
+            selected = selector.run()
+            if selected is not None:
+                name = selected["id"]
+            else:
+                ctx.console.print("\n[dim]Model selection cancelled.[/dim]\n")
+                return True
+        else:
+            name = "list"
+
+    if name in ("list", "ls", "status"):
         tier = "direct tool calling" if getattr(ctx.agent, "use_offline_tools", True) else "intent fallback"
         ctx.console.print(
             f"\nActive Model: [bold cyan]{current}[/bold cyan]  "
@@ -1223,6 +1315,31 @@ def handle_workspace(ctx: SlashContext, args: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# /json
+# ---------------------------------------------------------------------------
+
+def handle_json(ctx: SlashContext, args: str) -> bool:
+    """Toggle or configure structured JSON output mode."""
+    target = (args or "").strip().lower()
+    current = getattr(ctx.agent, "json_mode", False)
+
+    if target in {"on", "true", "yes", "1", "enable"}:
+        ctx.agent.json_mode = True
+        ctx.console.print("[bold green]JSON mode enabled.[/bold green] Agent turns will output structured JSON.")
+    elif target in {"off", "false", "no", "0", "disable"}:
+        ctx.agent.json_mode = False
+        ctx.console.print("[bold yellow]JSON mode disabled.[/bold yellow] Agent turns will output standard markdown.")
+    elif not target:
+        new_state = not current
+        ctx.agent.json_mode = new_state
+        state_str = "[bold green]enabled[/bold green]" if new_state else "[bold yellow]disabled[/bold yellow]"
+        ctx.console.print(f"JSON mode {state_str}.")
+    else:
+        ctx.console.print("[yellow]Usage: /json [on|off][/yellow]")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # /exit  /quit
 # ---------------------------------------------------------------------------
 
@@ -1243,6 +1360,8 @@ SLASH_COMMANDS: Dict[str, Tuple[Handler, str]] = {
     "/timeline":    (handle_timeline,    "Show recent timeline events"),
     "/rag":         (handle_rag,         "Semantic memory search & index management"),
     "/dna":         (handle_dna,         "Project DNA architecture report"),
+    "/onboard":     (handle_onboard,     "Generate and display or save onboarding report"),
+    "/review":      (handle_review,      "Automated code review & security check"),
     "/graph":       (handle_graph,       "Visual codebase dependency graph"),
     "/clear":       (handle_clear,       "Clear conversation history"),
     "/history":     (handle_history,     "Show recent conversation turns"),
@@ -1260,6 +1379,7 @@ SLASH_COMMANDS: Dict[str, Tuple[Handler, str]] = {
     "/sessions":    (handle_sessions,    "List archived conversation sessions"),
     "/workspace":   (handle_workspace,   "Manage multi-repo workspaces (list, add, remove, info)"),
     "/ws":          (handle_workspace,   "Alias for /workspace"),
+    "/json":        (handle_json,        "Toggle structured JSON response mode"),
     "/exit":        (handle_exit,        "Exit the session"),
     "/quit":        (handle_exit,        "Exit the session"),
 }

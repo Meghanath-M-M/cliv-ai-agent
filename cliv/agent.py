@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import logging
 import socket
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -578,7 +579,11 @@ class AIAgent:
                     )
 
         try:
-            result = tool.execute(**tool_input)
+            if hasattr(self, "ui") and self.ui and hasattr(self.ui, "status"):
+                with self.ui.status(f"[bold yellow]Executing {tool_name}...[/bold yellow]", spinner="line"):
+                    result = tool.execute(**tool_input)
+            else:
+                result = tool.execute(**tool_input)
         except Exception as exc:  # noqa: BLE001 - tool failures become model context
             logging.error(
                 "Error executing %s: %s", tool_name, redact_data(str(exc))
@@ -938,7 +943,12 @@ class AIAgent:
             full_messages = [system_msg] + context
 
             try:
-                content, tool_calls = self.backend.chat(full_messages, tool_schemas)
+                model_name = getattr(self.backend, "model", self.mode)
+                if hasattr(self, "ui") and self.ui and hasattr(self.ui, "status"):
+                    with self.ui.status(f"[bold cyan]Thinking ({model_name})...[/bold cyan]", spinner="dots"):
+                        content, tool_calls = self.backend.chat(full_messages, tool_schemas)
+                else:
+                    content, tool_calls = self.backend.chat(full_messages, tool_schemas)
             except ToolCallingUnsupported:
                 raise
             except BackendError as exc:
@@ -988,8 +998,12 @@ class AIAgent:
 
             if tool_calls:
                 executed_calls = self._execute_tool_calls(tool_calls)
+
                 for tool_call, result in executed_calls:
                     logging.info("Tool result: %s...", result[:500])
+                    if hasattr(self, "ui") and self.ui and hasattr(self.ui, "print"):
+                        preview_len = f"{len(result):,} chars" if result else "empty"
+                        self.ui.print(f"  [dim]⚡ Tool [bold]{tool_call.name}[/bold] completed ({preview_len})[/dim]")
                     self.messages.append(
                         {
                             "role": "tool",
@@ -1092,7 +1106,12 @@ class AIAgent:
 
             if not self.auto_approve:
                 try:
-                    answer = input("Restore these files? [y/N]: ").strip().lower()
+                    if hasattr(self, "ui") and self.ui and hasattr(self.ui, "print"):
+                        self.ui.print("\n[bold yellow]Restore these files? \\[y/N]: [/bold yellow]", end="")
+                    else:
+                        print("\nRestore these files? [y/N]: ", end="")
+                    sys.stdout.flush()
+                    answer = input().strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     response = "Undo cancelled."
                     self.messages.append({"role": "assistant", "content": response})
@@ -1157,7 +1176,11 @@ class AIAgent:
                 "Error: No LLM backend is available. "
                 "Install `cliv[online]` or `cliv[offline]`."
             )
-        response = self.offline.chat(user_input, history=self.messages)
+        if hasattr(self, "ui") and self.ui and hasattr(self.ui, "status"):
+            with self.ui.status(f"[bold cyan]Processing offline command ({self.local_model})...[/bold cyan]", spinner="dots"):
+                response = self.offline.chat(user_input, history=self.messages)
+        else:
+            response = self.offline.chat(user_input, history=self.messages)
         self.messages.append({"role": "assistant", "content": response})
         self._save_history()
         return response
@@ -1174,7 +1197,11 @@ class AIAgent:
             try:
                 from cliv.healing import SelfHealingEngine
 
-                result = SelfHealingEngine(self).heal(target=target)
+                if hasattr(self, "ui") and self.ui and hasattr(self.ui, "status"):
+                    with self.ui.status("[bold magenta]Diagnosing and repairing test failures...[/bold magenta]", spinner="aesthetic"):
+                        result = SelfHealingEngine(self).heal(target=target)
+                else:
+                    result = SelfHealingEngine(self).heal(target=target)
                 response = result.render()
                 self._timeline_event(
                     "self_heal",

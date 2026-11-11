@@ -187,6 +187,40 @@ class ProjectIntelligence:
     def external_packages(self) -> List[str]:
         return sorted(self.graph.imported_external())
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return structured dictionary representation for machine-readable output."""
+        return {
+            "project_name": self.scan.project_name,
+            "root": str(self.scan.root),
+            "languages": dict(self.scan.languages),
+            "source_files": self.source_files,
+            "symbol_count": self.symbol_count,
+            "class_count": self.class_count,
+            "function_count": self.function_count,
+            "method_count": self.method_count,
+            "entry_points": list(self.entry_points),
+            "external_packages": self.external_packages,
+            "components": [
+                {
+                    "key": c.key,
+                    "name": c.name,
+                    "role": c.role,
+                    "files": list(c.files),
+                    "symbols": c.symbols,
+                    "internal_edges": c.internal_edges,
+                }
+                for c in self.components
+            ],
+            "issues": [
+                {
+                    "severity": i.severity,
+                    "category": i.category,
+                    "message": i.message,
+                }
+                for i in self.issues
+            ],
+        }
+
     def render(self) -> str:
         scan = self.scan
         lines: List[str] = [

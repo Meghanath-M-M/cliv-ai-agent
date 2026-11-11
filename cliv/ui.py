@@ -7,7 +7,9 @@ or a tiny fake that records approval requests.
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+import os
+import sys
+from contextlib import contextmanager, nullcontext
 from typing import Any, Dict, Optional, Protocol
 
 from rich.console import Console
@@ -18,22 +20,18 @@ from cliv.models import SessionStats
 
 
 class UI(Protocol):
-    def status(self, message: str, spinner: str = "dots"):
-        ...
+    def status(self, message: str, spinner: str = "dots"): ...
 
-    def print(self, message: str = "", **kwargs: Any) -> None:
-        ...
+    def print(self, message: str = "", **kwargs: Any) -> None: ...
 
-    def print_preview(self, preview: str) -> None:
-        ...
+    def print_preview(self, preview: str) -> None: ...
 
     def confirm(
         self,
         tool_name: str,
         tool_input: Dict[str, Any],
         preview: Optional[str] = None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class NullUI:
@@ -67,9 +65,17 @@ class ConsoleUI:
 
     def __init__(self, console: Optional[Console] = None):
         self.console = console or Console()
+        self._current_status = None
 
+    @contextmanager
     def status(self, message: str, spinner: str = "dots"):
-        return self.console.status(message, spinner=spinner)
+        status_obj = self.console.status(message, spinner=spinner)
+        self._current_status = status_obj
+        try:
+            with status_obj:
+                yield status_obj
+        finally:
+            self._current_status = None
 
     def print(self, message: str = "", **kwargs: Any) -> None:
         self.console.print(message, **kwargs)
@@ -85,6 +91,14 @@ class ConsoleUI:
     ) -> bool:
         import json
 
+        # Stop any active status/spinner so background redrawing does not corrupt stdin/stdout
+        if self._current_status is not None:
+            try:
+                self._current_status.stop()
+            except Exception:
+                pass
+            self._current_status = None
+
         args_text = json.dumps(tool_input, indent=2)
         if len(args_text) > 1500:
             args_text = args_text[:1500] + "\n... [args truncated]"
@@ -97,7 +111,18 @@ class ConsoleUI:
             self.console.print("\n[bold]Proposed change:[/bold]")
             render_preview(preview, self.console)
         try:
-            self.console.print("[bold yellow]Proceed? [Y/N]: [/bold yellow]", end="")
+            sys.stdout.flush()
+            if os.name == "nt":
+                try:
+                    import msvcrt
+
+                    while msvcrt.kbhit():
+                        msvcrt.getwch()
+                except Exception:
+                    pass
+
+            self.console.print("\n[bold yellow]Proceed? \\[y/N]: [/bold yellow]", end="")
+            sys.stdout.flush()
             response = input().strip().lower()
             return response in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
@@ -129,4 +154,3 @@ def render_cost_dashboard(
     )
     parts.append(f"Cost: [bold magenta]${stats.cost_usd:.6f}[/bold magenta]")
     console.print(" · ".join(parts))
-
