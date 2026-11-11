@@ -9,7 +9,7 @@
  ╚═════╝╚══════╝╚═╝  ╚═══╝ 
 </pre>
 
-# cliv
+# CLIV
 
 **Terminal-native intelligence for your local codebase.**
 
